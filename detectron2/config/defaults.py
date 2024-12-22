@@ -74,6 +74,9 @@ _C.INPUT.CROP.TYPE = "relative_range"
 # Size of crop in range (0, 1] if CROP.TYPE is "relative" or "relative_range" and in number of
 # pixels if CROP.TYPE is "absolute"
 _C.INPUT.CROP.SIZE = [0.9, 0.9]
+# pixels if CROP.TYPE is "str"
+_C.INPUT.PRIOR = None
+
 
 
 # Whether the model needs RGB, YUV, HSV etc.
@@ -106,6 +109,24 @@ _C.DATASETS.TEST = ()
 _C.DATASETS.PROPOSAL_FILES_TEST = ()
 # Number of top scoring precomputed proposals to keep for test
 _C.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST = 1000
+# Final nms threshold for wsi test
+_C.DATASETS.FINAL_NMS_THR = -0.1
+# Patch size for wsi test
+_C.DATASETS.PATCH_SIZE = (1000,1000)
+# overlap step for wsi test
+_C.DATASETS.STEP = 0.5
+# downsample level for wsi test
+_C.DATASETS.SCALE = 1.0
+# bbox whose axis length is smaller than axis_thr is filtered
+_C.DATASETS.AXIS_THR = 0.0
+# bbox whose area size is smaller than area_thr is filtered
+_C.DATASETS.AREA_THR = 0.0
+# DBSCAN阈值，用于过滤距离较远的目标
+_C.DATASETS.DBSCAN_THR = 30
+# DBSCAN中的最小样本数，用于确定一个簇的最小大小
+_C.DATASETS.MIN_SAMPLE = 2
+# 用于扩展边界框的大小
+_C.DATASETS.EXPAND = 10
 
 # -----------------------------------------------------------------------------
 # DataLoader
@@ -626,6 +647,9 @@ _C.TEST.PRECISE_BN.NUM_ITER = 200
 # ---------------------------------------------------------------------------- #
 # Directory where output files are written
 _C.OUTPUT_DIR = "./output"
+# Directory where resutls files are written
+_C.SAVE_DIR = "./results"
+
 # Set seed to negative to fully randomize everything.
 # Set seed to positive to use a fixed seed. Note that a fixed seed increases
 # reproducibility but does not guarantee fully deterministic behavior.

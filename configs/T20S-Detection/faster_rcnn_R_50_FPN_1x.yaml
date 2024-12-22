@@ -1,0 +1,50 @@
+_BASE_: "../Base-RCNN-FPN.yaml"
+MODEL:
+  WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
+  # WEIGHTS: null
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 50
+  ROI_HEADS:
+    NUM_CLASSES: 1 # 类别数
+    SCORE_THRESH_TEST: 0.05
+
+DATASETS:
+  TRAIN: ("T20S_train",) # 训练数据集名称
+  TEST: ("T20S_val",) # 测试数据集名称
+
+SOLVER:
+  LR_SCHEDULER_NAME: "WarmupMultiStepLR"
+  IMS_PER_BATCH: 8 # batch_size=2; iters_in_one_epoch = dataset_imgs/batch_size
+  MAX_ITER: 60000
+  BASE_LR: 1e-3
+  BIAS_LR_FACTOR: 2.0
+  MOMENTUM: 0.9
+  WEIGHT_DECAY: 0.0
+  WEIGHT_DECAY_NORM: 0.0 
+  GAMMA: 0.96
+  STEPS: (10000, 20000, 30000, 40000, 50000, 60000)
+  WARMUP_FACTOR: 0.001
+  WARMUP_ITERS: 0
+  WARMUP_METHOD: 'linear'
+  CHECKPOINT_PERIOD: 2500
+
+DATALOADER:
+  NUM_WORKERS: 1
+
+INPUT:
+  CROP:
+    ENABLED: True
+  MAX_SIZE_TRAIN: 1024 # 训练图片输入的最大尺寸
+  MAX_SIZE_TEST: 7676 # 测试数据输入的最大尺寸
+  MIN_SIZE_TRAIN: (768,1024) # 训练图片输入的最小尺寸，可以设定为多尺度训练
+  MIN_SIZE_TEST: 7420
+  MIN_SIZE_TRAIN_SAMPLING: "range" 
+  # cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING，其存在两种配置，分别为 choice 与 range ：
+  # range 让图像的短边从 512-768随机选择
+  # choice ： 把输入图像转化为指定的，有限的几种图片大小进行训练，即短边只能为 512或者768
+
+TEST:
+  EVAL_PERIOD: 5000
+
+OUTPUT_DIR: "/home/ps/ltc/detectron2/experiments/test/"

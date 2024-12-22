@@ -37,7 +37,7 @@ from detectron2.evaluation import (
     verify_results,
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
-
+from detectron2.data.datasets.pascal_voc import register_pascal_voc
 
 def build_evaluator(cfg, dataset_name, output_folder=None):
     """
@@ -67,7 +67,8 @@ def build_evaluator(cfg, dataset_name, output_folder=None):
     if evaluator_type == "cityscapes_sem_seg":
         return CityscapesSemSegEvaluator(dataset_name)
     elif evaluator_type == "pascal_voc":
-        return PascalVOCDetectionEvaluator(dataset_name)
+        # return PascalVOCDetectionEvaluator(dataset_name)
+        return PascalVOCDetectionEvaluator(dataset_name, cfg.DATASETS.LEVEL)
     elif evaluator_type == "lvis":
         return LVISEvaluator(dataset_name, output_dir=output_folder)
     if len(evaluator_list) == 0:
@@ -152,7 +153,16 @@ def main(args):
 
 def invoke_main() -> None:
     args = default_argument_parser().parse_args()
+    args.GPU = '2'
+    args.resume = True
+    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
+    # args.eval_only = True
+
     print("Command Line Args:", args)
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.GPU
     launch(
         main,
         args.num_gpus,
@@ -162,6 +172,25 @@ def invoke_main() -> None:
         args=(args,),
     )
 
+def register_all_pascal_voc(root):
+    # dir = "/media/ps/passport1/ltc/DHB/VOC2007_pos_based_scale_20/"
+    # dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_250/"
+    dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_1000/"
+
+    
+    SPLITS = [
+        ("voc_2007_trainval", dir, "trainval"),
+        ("voc_2007_train", dir, "train"),
+        ("voc_2007_val", dir, "val"),
+        ("voc_2007_test", dir, "test"),
+        ("voc_2007_wsi", dir, "WSI"),
+    ]
+    for name, dirname, split in SPLITS:
+        year = 2007 if "2007" in name else 2012
+        register_pascal_voc(name, os.path.join(root, dirname), split, year)
+        MetadataCatalog.get(name).evaluator_type = "pascal_voc"
+
 
 if __name__ == "__main__":
+    register_all_pascal_voc(root="/media/ps/passport1/ltc/monuseg18/")
     invoke_main()  # pragma: no cover

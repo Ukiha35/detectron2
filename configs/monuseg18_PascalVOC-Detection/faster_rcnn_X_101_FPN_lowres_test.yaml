@@ -1,0 +1,61 @@
+_BASE_: "../Base-RCNN-FPN.yaml"
+MODEL:
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_overfit/model_final.pth"
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_small/model_final.pth"
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres/model_final.pth"
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_6anchor_new/model_final.pth"
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_7anchor/model_final.pth"
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_9anchor/model_final.pth"
+  # WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_lowres_11anchor/model_final.pth"
+  PIXEL_STD: [47.49, 41.63, 51.28]
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 101
+    STRIDE_IN_1X1: False  # this is a C2 model
+    NUM_GROUPS: 32
+    WIDTH_PER_GROUP: 8
+  ROI_HEADS:
+    NUM_CLASSES: 1
+    SCORE_THRESH_TEST: 0.0
+    NMS_THRESH_TEST: 0.5
+  ROI_BOX_HEAD:
+    NUM_FC: 2
+    NUM_CONV: 0
+  ANCHOR_GENERATOR:
+    # SIZES: [[8], [16], [24], [32]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+
+    SIZES: [[16], [24], [32], [48]]  # One size for each in feature map
+    ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+
+    # SIZES: [[16], [24], [32]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5, 0.66, 1.0, 1.5, 2.0]]
+    
+    # SIZES: [[12], [16], [24]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5,0.61,0.79,1.3,1.63,2.0]]
+
+    # SIZES: [[12], [16], [24]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5, 0.66, 0.83, 1.0, 1.2, 1.5, 2.0]]
+
+    # SIZES: [[12], [16], [24]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5, 0.67, 0.83, 0.91, 1.0, 1.1, 1.2, 1.5, 2.0]]
+
+    # SIZES: [[12], [16], [24]]  # One size for each in feature map
+    # ASPECT_RATIOS: [[0.5, 0.6, 0.72, 0.83, 0.91, 1.0, 1.1, 1.2, 1.35, 1.6, 2.0]]
+
+  RPN:
+    IN_FEATURES: ["p2", "p3", "p4", "p5"]
+    # IN_FEATURES: ["p2", "p3", "p4"]
+
+DATASETS:
+  TEST: ('voc_2007_test',)
+  FINAL_NMS_THR: 0.1
+  SCALE: 2.0
+  PATCH_SIZE: (1000,1000)
+  STEP: 1.0
+
+TEST:
+  DETECTIONS_PER_IMAGE: 2000
+
+SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_lowres_small/" #######################
+  

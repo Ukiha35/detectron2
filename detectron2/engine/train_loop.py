@@ -528,3 +528,36 @@ class AMPTrainer(SimpleTrainer):
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)
         self.grad_scaler.load_state_dict(state_dict["grad_scaler"])
+
+import cv2,os
+def visualize_gt_bbox(data_dict, output_dir, file_name="output_with_bboxes.jpg"):
+    """
+    从包含 image 和 instances 的字典中提取信息，并将 GT bounding boxes 可视化保存。
+
+    Args:
+        data_dict (dict): 包含 'image' 和 'instances' 的字典。
+            - 'image': 图像 tensor，形状为 (C, H, W)。
+            - 'instances': 包含 ground truth boxes 的实例对象。
+        output_dir (str): 输出图像的保存路径。
+        file_name (str): 输出文件名，默认 'output_with_bboxes.jpg'。
+    """
+    # 提取 image 和 instances
+    image_tensor = data_dict['image']  # (C, H, W)
+    instances = data_dict['instances']
+
+    # Step 1: 转换图像格式 (C, H, W) -> (H, W, C) 并转换为 numpy
+    image_np = image_tensor.permute(1, 2, 0).cpu().numpy()  # 转换为 (H, W, C)
+    image_np = np.ascontiguousarray(np.clip(image_np, 0, 255)).astype(np.uint8)  # 保证在 [0, 255] 范围内
+
+    # Step 2: 获取 ground truth bounding boxes
+    gt_boxes = instances.gt_boxes.tensor.cpu().numpy()  # (N, 4)，每行 [xmin, ymin, xmax, ymax]
+    
+    # Step 3: 绘制 bounding boxes
+    for box in gt_boxes:
+        x_min, y_min, x_max, y_max = map(int, box)  # 将坐标转换为整数
+        cv2.rectangle(image_np, (x_min, y_min), (x_max, y_max), color=(0, 255, 0), thickness=2)  # 绿色边框
+    # Step 4: 保存图像
+    os.makedirs(output_dir, exist_ok=True)  # 确保输出路径存在
+    output_path = os.path.join(output_dir, file_name)
+    cv2.imwrite(output_path, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))  # OpenCV 使用 BGR 格式
+    print(f"Image with bounding boxes saved to {output_path}")

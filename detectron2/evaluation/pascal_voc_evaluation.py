@@ -13,8 +13,234 @@ import torch
 from detectron2.data import MetadataCatalog
 from detectron2.utils import comm
 from detectron2.utils.file_io import PathManager
-
+from detectron2.structures import Boxes
+import json
+from torchvision.ops import nms
 from .evaluator import DatasetEvaluator
+from tqdm import tqdm
+from detectron2.structures import Instances
+
+
+def bbox_iou(bbox_patch, bbox_roi):
+    """
+    计算两个bbox的IoU值
+    bbox格式：[xmin, ymin, xmax, ymax]
+    """
+    x1, y1, x2, y2 = bbox_patch
+    x1_t, y1_t, x2_t, y2_t = bbox_roi
+    
+    # 计算交集
+    inter_x1 = max(x1, x1_t)
+    inter_y1 = max(y1, y1_t)
+    inter_x2 = min(x2, x2_t)
+    inter_y2 = min(y2, y2_t)
+    
+    # 如果没有交集
+    if inter_x1 >= inter_x2 or inter_y1 >= inter_y2:
+        return 0.0
+    
+    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    patch_area = (x2 - x1) * (y2 - y1)
+        
+    # 返回IoU
+    return inter_area / patch_area
+
+def filter_bboxes_by_roi(splitlines, rois, imagenames, threshold=0.5):
+    """
+    根据给定的ROI和阈值过滤掉bbox中不满足条件的
+    Args:
+        splitlines: 包含图片名称和bbox的列表，每一行是一个列表，格式为[imagename, xmin, ymin, xmax, ymax, score]
+        rois: 一个字典，键是图片名称，值是该图片对应的roi的bbox列表
+        imagenames: 图片名称的列表，只有这些图片会被处理
+        threshold: IoU阈值，只有IoU大于阈值的bbox才会被保留
+    
+    Returns:
+        filtered_splitlines: 过滤后的splitlines
+    """
+    filtered_splitlines = []
+    
+    for imagename in imagenames:
+        # 只处理指定的图片
+        lines_for_imagename = [line for line in splitlines if line[0] == imagename]
+        
+        # 如果该图片有对应的roi
+        if imagename in rois:
+            rois_list = rois[imagename]
+            
+            for line in lines_for_imagename:
+                bbox = [float(l) for l in line[2:]]  # 获取bbox：[xmin, ymin, xmax, ymax]
+                score = float(line[1])  # 获取得分
+                
+                # 检查bbox与所有roi的IoU
+                keep_bbox = False
+                for roi in rois_list:
+                    iou = bbox_iou(bbox, roi)
+                    if iou >= threshold:
+                        keep_bbox = True
+                        break
+                
+                # 如果bbox与任一roi的IoU大于阈值，则保留该bbox
+                if keep_bbox:
+                    filtered_splitlines.append(line)
+        else:
+            # 如果没有roi，保留该bbox（根据需求可做调整）
+            filtered_splitlines.extend(lines_for_imagename)
+    
+    return filtered_splitlines
+
+
+
+
+def fast_nms(instances, thresh):
+    """
+    Apply Non-Maximum Suppression (NMS) using PyTorch's GPU-accelerated implementation.
+    
+    Args:
+        instances (Instances): an Instances object containing fields such as `pred_boxes`, `scores`, and `pred_classes`.
+        thresh (float): NMS threshold, only detections with IoU < threshold will be kept.
+        
+    Returns:
+        Instances: a new Instances object containing the detections after NMS.
+    """
+    if thresh < 0 or thresh > 1:
+        return instances
+    
+    # Extract fields
+    dets = instances.pred_boxes.tensor  # Tensor of shape (N, 4) -> (xmin, ymin, xmax, ymax)
+    scores = instances.scores  # Tensor of shape (N, ) -> detection scores
+    
+    # Use PyTorch's built-in NMS function
+    keep = nms(dets, scores, thresh)  # Returns the indices of boxes to keep
+    
+    # Filter instances to keep only the selected detections
+    new_instances = instances[keep]
+    
+    return new_instances
+
+def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overlap=0.5):
+    """
+    Apply NMS on overlapping patches of an image.
+    
+    Args:
+        instances (Instances): an Instances object containing fields such as pred_boxes, scores, and pred_classes.
+        image_size (tuple): The size of the original image (height, width).
+        patch_size (tuple): The size of each patch (height, width).
+        overlap_size (tuple): The size of the overlap region between patches (height, width).
+        thresh (float): NMS threshold, only detections with IoU < threshold will be kept.
+        
+    Returns:
+        Instances: a new Instances object containing the detections after NMS.
+    """
+    if thresh < 0 or thresh > 1:
+        return instances
+        
+    # Image dimensions
+    img_width, img_height = image_size
+    patch_width, patch_height = patch_size
+    overlap_height, overlap_width = [int(i*overlap) for i in patch_size]
+    
+    # Split the image into overlapping patches
+    print(f'performing nms on overlapping patches...')
+    
+    for y in tqdm(range(0, img_height, patch_height - overlap_height)):  # Step by (patch_height - overlap_height)
+        for x in range(0, img_width, patch_width - overlap_width):  # Step by (patch_width - overlap_width)
+            # Calculate patch boundaries
+            patch_xmin = x
+            patch_ymin = y
+            patch_xmax = min(x + patch_width, img_width)
+            patch_ymax = min(y + patch_height, img_height)
+            
+            # Select boxes inside this patch
+            dets = instances.pred_boxes.tensor  # (N, 4) -> (xmin, ymin, xmax, ymax)
+            patch_indices = ((dets[:, 0] >= patch_xmin) & (dets[:, 1] >= patch_ymin) & 
+                             (dets[:, 0] <= patch_xmax) & (dets[:, 1 ] <= patch_ymax))
+
+            # If there are any boxes in this patch, apply NMS
+            if patch_indices.sum() > 0:
+                # Create Instances for this patch
+                patch_instances = instances[patch_indices]
+                instances = instances[~patch_indices]
+                # Apply NMS to the current patch
+                patch_instances = fast_nms(patch_instances, thresh)
+                
+                # Store the result
+                instances = Instances.cat([patch_instances,instances])
+
+    # Combine all patch results into one Instances object
+    return instances
+
+def py_cpu_nms(instances, thresh):
+    """
+    Apply Non-Maximum Suppression (NMS) to the detections in the `instances`.
+    
+    Args:
+        instances (Instances): an Instances object containing fields such as `pred_boxes`, `scores`, and `pred_classes`.
+        thresh (float): NMS threshold, only detections with IoU < threshold will be kept.
+        
+    Returns:
+        Instances: a new Instances object containing the detections after NMS.
+    """
+    if thresh<0 or thresh>1:
+        return instances
+    
+    # Extract fields from Instances object
+    dets = instances.pred_boxes.tensor  # Tensor of shape (N, 4) -> (xmin, ymin, xmax, ymax)
+    scores = instances.scores  # Tensor of shape (N, ) -> detection scores
+    classes = instances.pred_classes  # Tensor of shape (N, ) -> predicted class labels (not used in NMS directly)
+    
+    # Convert to numpy arrays for easier manipulation
+    dets = dets.cpu().numpy()
+    scores = scores.cpu().numpy()
+    classes = classes.cpu().numpy()  # If needed, you can use classes in filtering later
+    
+    # Calculate the areas of the bounding boxes
+    x1 = dets[:, 0]
+    y1 = dets[:, 1]
+    x2 = dets[:, 2]
+    y2 = dets[:, 3]
+    
+    areas = (y2 - y1 + 1) * (x2 - x1 + 1)
+    
+    keep = []  # List to keep the indexes of the boxes that pass NMS
+    index = scores.argsort()[::-1]  # Sort by score in descending order
+    
+    while index.size > 0:
+        i = index[0]  # Select the box with the highest score
+        keep.append(i)
+        
+        # Calculate the overlap of the current box with the others
+        x11 = np.maximum(x1[i], x1[index[1:]])  # max of xmin
+        y11 = np.maximum(y1[i], y1[index[1:]])  # max of ymin
+        x22 = np.minimum(x2[i], x2[index[1:]])  # min of xmax
+        y22 = np.minimum(y2[i], y2[index[1:]])  # min of ymax
+        
+        # Compute the width and height of the overlapping area
+        w = np.maximum(0, x22 - x11 + 1)
+        h = np.maximum(0, y22 - y11 + 1)
+        
+        # Compute the intersection area
+        overlaps = w * h
+        
+        # Compute the IoU (Intersection over Union)
+        ious = overlaps / (areas[i] + areas[index[1:]] - overlaps)
+        
+        # Keep only the boxes that have IoU <= threshold
+        idx = np.where(ious <= thresh)[0]
+        index = index[idx + 1]  # Update the index by excluding the boxes that have high IoU with the current box
+    
+    # Now we have the `keep` list, which contains the indices of the detections that pass NMS
+    keep_dets = dets[keep]
+    keep_scores = scores[keep]
+    keep_classes = classes[keep]
+    
+    # Create a new Instances object with the NMS results
+    new_instances = instances.__class__(instances.image_size)
+    new_instances.set('pred_boxes', Boxes(torch.tensor(keep_dets)))
+    new_instances.set('scores', torch.tensor(keep_scores))
+    new_instances.set('pred_classes', torch.tensor(keep_classes))
+    
+    return new_instances
+
 
 
 class PascalVOCDetectionEvaluator(DatasetEvaluator):
@@ -28,7 +254,7 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
     official API.
     """
 
-    def __init__(self, dataset_name):
+    def __init__(self, dataset_name, scale=0, final_nms_thr=0.5, axis_thr=0, area_thr=0):
         """
         Args:
             dataset_name (str): name of the dataset, e.g., "voc_2007_test"
@@ -47,25 +273,122 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
         self._is_2007 = meta.year == 2007
         self._cpu_device = torch.device("cpu")
         self._logger = logging.getLogger(__name__)
+        self.final_nms_thr = final_nms_thr
+        self.axis_thr = axis_thr
+        self.area_thr = area_thr
+        self.scale=scale
 
     def reset(self):
         self._predictions = defaultdict(list)  # class name -> list of prediction strings
 
-    def process(self, inputs, outputs):
+    def process(self, inputs, outputs):        
         for input, output in zip(inputs, outputs):
             image_id = input["image_id"]
-            instances = output["instances"].to(self._cpu_device)
-            boxes = instances.pred_boxes.tensor.numpy()
-            scores = instances.scores.tolist()
-            classes = instances.pred_classes.tolist()
+            instances = nms_on_patches(output["instances"],output['instances'].image_size, thresh=self.final_nms_thr)
+            # instances = fast_nms(output["instances"], final_nms_thr)
+            # instances = py_cpu_nms(output["instances"].to(self._cpu_device),final_nms_thr)
+            boxes = instances.pred_boxes.tensor.to(self._cpu_device).numpy()
+            scores = instances.scores.to(self._cpu_device).tolist()
+            classes = instances.pred_classes.to(self._cpu_device).tolist()
+            new_predictions = []
             for box, score, cls in zip(boxes, scores, classes):
                 xmin, ymin, xmax, ymax = box
                 # The inverse of data loading logic in `datasets/pascal_voc.py`
                 xmin += 1
                 ymin += 1
-                self._predictions[cls].append(
-                    f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
-                )
+                
+                width = xmax - xmin
+                height = ymax - ymin
+                area = width * height
+                if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr:
+                    new_predictions.append(
+                        f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
+                    )
+            self._predictions[cls].extend(new_predictions)
+            print(f"{len(scores)-len(new_predictions)} ({((len(scores)-len(new_predictions))/len(scores)):.1f}%) bboxes are filtered through axis_thr={self.axis_thr}, area_thr={self.area_thr}.")
+            
+    
+    def save(self, output_dir: str):
+        """
+        Save the detection results for each image to a separate JSON file.
+
+        Args:
+            output_dir (str): Directory to save the JSON files.
+        """        
+        # Ensure the output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+
+        with PathManager.open(self._image_set_path, "r") as f:
+            lines = f.readlines()
+        imagenames = [x.strip() for x in lines]
+        for imagename in imagenames:
+            prediction_data = []
+            if os.path.exists(os.path.join(output_dir, f"{imagename}.json")):
+                continue
+            
+            # Iterate through the predictions for each class
+            for class_id, predictions in self._predictions.items():
+                # Iterate through the predictions for each image
+                splitlines = [x.strip().split(" ") for x in predictions] 
+                for pred in [p for p in splitlines if p[0]==imagename]:
+                    # Prepare the prediction data to be saved for this image
+                    prediction_data.append(
+                            {
+                                "class_id": class_id,
+                                "class": 'pos',
+                                "score": float(pred[1]),
+                                "x": float(pred[2]),
+                                "y": float(pred[3]),
+                                "w": round((float(pred[4]) - float(pred[2])), 3),
+                                "h": round((float(pred[5]) - float(pred[3])), 3),
+                            }
+                        )
+
+            # Define the output file path for this image
+            output_file = os.path.join(output_dir, f"{imagename}.json")
+
+            # Save the new file
+            if len(prediction_data)>0:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(prediction_data, f, indent=4)
+                print(f"Saved detection results to {output_file}.")
+                    
+        
+    def load(self, output_dir: str):
+        """
+        Load the detection results from JSON files in the specified directory and classify by class_id.
+
+        Args:
+            output_dir (str): Directory containing the JSON files.
+        """
+        # Initialize a dictionary to store predictions by class_id
+        loaded_data = defaultdict(list)
+
+        # Get all JSON files in the output directory
+        for json_file in os.listdir(output_dir):
+            if json_file.endswith(".json"):
+                json_path = os.path.join(output_dir, json_file)
+
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    # Load the data from the JSON file
+                    prediction_data = json.load(f)
+
+                    imagename = json_file.split('.json')[0]
+
+                    # Classify detections by class_id
+                    for detection in prediction_data:
+                        class_id = detection["class_id"]
+                        score = detection["score"]
+                        bbox = [detection[p] for p in ['x','y','w','h']]
+                        bbox[2] += bbox[0]
+                        bbox[3] += bbox[1]
+                        # Store the detection by class_id
+                        loaded_data[class_id].append(f"{imagename} {score:.3f} {bbox[0]:.1f} {bbox[1]:.1f} {bbox[2]:.1f} {bbox[3]:.1f}")
+        
+        self._predictions = loaded_data
+        print(f"Loaded detection results from {json_path}.")
+
+        return loaded_data
 
     def evaluate(self):
         """
@@ -92,6 +415,8 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
             res_file_template = os.path.join(dirname, "{}.txt")
 
             aps = defaultdict(list)  # iou -> ap per class
+            recs = defaultdict(list)  # iou -> ap per class
+            precs = defaultdict(list)  # iou -> ap per class
             for cls_id, cls_name in enumerate(self._class_names):
                 lines = predictions.get(cls_id, [""])
 
@@ -108,10 +433,22 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
                         use_07_metric=self._is_2007,
                     )
                     aps[thresh].append(ap * 100)
+                    recs[thresh].append(rec * 100)
+                    precs[thresh].append(prec * 100)
+
+            rec30, prec30, ap30 = voc_eval(
+                res_file_template,
+                self._anno_file_template,
+                self._image_set_path,
+                cls_name,
+                ovthresh=30.0 / 100.0,
+                use_07_metric=self._is_2007,
+            )
 
         ret = OrderedDict()
         mAP = {iou: np.mean(x) for iou, x in aps.items()}
-        ret["bbox"] = {"AP": np.mean(list(mAP.values())), "AP50": mAP[50], "AP75": mAP[75]}
+        ret["bbox"] = {"AP": np.mean(list(mAP.values())), "AP50": mAP[50], "AP75": mAP[75], "REC75": recs[75][0][-1], "PREC75":precs[75][0][-1], "REC50": recs[50][0][-1], "PREC50":precs[50][0][-1], "REC30": rec30[-1]*100, "PREC30":prec30[-1]*100}
+        self._ap = ret
         return ret
 
 
@@ -142,14 +479,19 @@ def parse_rec(filename):
         obj_struct["difficult"] = int(obj.find("difficult").text)
         bbox = obj.find("bndbox")
         obj_struct["bbox"] = [
-            int(bbox.find("xmin").text),
-            int(bbox.find("ymin").text),
-            int(bbox.find("xmax").text),
-            int(bbox.find("ymax").text),
+            int(float(bbox.find("xmin").text)),
+            int(float(bbox.find("ymin").text)),
+            int(float(bbox.find("xmax").text)),
+            int(float(bbox.find("ymax").text)),
         ]
         objects.append(obj_struct)
 
-    return objects
+    rois = []
+    for roi in tree.findall(".roi/bndbox"):
+        bbox = [float(roi.find(x).text) for x in ["xmin", "ymin", "xmax", "ymax"]]
+        rois.append(bbox)
+
+    return objects, rois
 
 
 def voc_ap(rec, prec, use_07_metric=False):
@@ -216,8 +558,9 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
 
     # load annots
     recs = {}
+    rois = {}
     for imagename in imagenames:
-        recs[imagename] = parse_rec(annopath.format(imagename))
+        recs[imagename], rois[imagename] = parse_rec(annopath.format(imagename))
 
     # extract gt objects for this class
     class_recs = {}
@@ -237,6 +580,9 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
         lines = f.readlines()
 
     splitlines = [x.strip().split(" ") for x in lines]
+    
+    splitlines = filter_bboxes_by_roi(splitlines,rois,imagenames,0.5)
+    
     image_ids = [x[0] for x in splitlines]
     confidence = np.array([float(x[1]) for x in splitlines])
     BB = np.array([[float(z) for z in x[2:]] for x in splitlines]).reshape(-1, 4)

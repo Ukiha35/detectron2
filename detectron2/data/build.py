@@ -5,7 +5,7 @@ import numpy as np
 import operator
 import pickle
 from collections import OrderedDict, defaultdict
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 import torch
 import torch.utils.data as torchdata
 from tabulate import tabulate
@@ -21,13 +21,19 @@ from detectron2.utils.logger import _log_api_usage, log_first_n
 from .catalog import DatasetCatalog, MetadataCatalog
 from .common import AspectRatioGroupedDataset, DatasetFromList, MapDataset, ToIterableDataset
 from .dataset_mapper import DatasetMapper
-from .detection_utils import check_metadata_consistency
+from . import detection_utils as utils
 from .samplers import (
     InferenceSampler,
     RandomSubsetTrainingSampler,
     RepeatFactorTrainingSampler,
     TrainingSampler,
 )
+from sklearn.cluster import DBSCAN
+import cv2
+import os
+import json
+import openslide
+import h5py
 
 """
 This file contains the default logic to build a dataloader for training or testing.
@@ -37,10 +43,52 @@ __all__ = [
     "build_batch_data_loader",
     "build_detection_train_loader",
     "build_detection_test_loader",
+    "build_detection_wsi_test_loader",
     "get_detection_dataset_dicts",
     "load_proposals_into_dataset",
     "print_instances_class_histogram",
 ]
+
+
+def cluster_bboxes_with_dbscan(coordinates, distance_threshold=50, min_samples=1):
+    """
+    Clusters bounding boxes using DBSCAN based on spatial proximity.
+    
+    Args:
+        coordinates (np.array): Array of shape (N, 4), where each row is [x, y, w, h].
+        distance_threshold (float): Maximum distance between centers of boxes to form a cluster.
+    
+    Returns:
+        parent_boxes (np.array): Array of parent bounding boxes (x, y, w, h) after clustering.
+    """
+    # Step 1: 计算边界框的中心
+    centers = np.array([
+        [bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2]  # Center (x, y)
+        for bbox in coordinates
+    ])
+    
+    # Step 2: 使用 DBSCAN 对中心点进行聚类
+    clustering = DBSCAN(eps=distance_threshold, min_samples=min_samples, metric='euclidean').fit(centers)
+    labels = clustering.labels_  # 每个框的簇标签
+    
+    # Step 3: 根据聚类结果计算父类框
+    parent_boxes = []
+    for label in np.unique(labels):
+        cluster_indices = np.where(labels == label)[0]
+        cluster_boxes = coordinates[cluster_indices]
+        
+        # 合并当前簇中的所有框，计算父类框的边界
+        x_min = np.min(cluster_boxes[:, 0])
+        y_min = np.min(cluster_boxes[:, 1])
+        x_max = np.max(cluster_boxes[:, 0] + cluster_boxes[:, 2])
+        y_max = np.max(cluster_boxes[:, 1] + cluster_boxes[:, 3])
+        
+        # 父类框：[x, y, w, h]
+        parent_boxes.append([x_min, y_min, x_max - x_min, y_max - y_min])
+    
+    return np.array(parent_boxes)
+
+
 
 
 def filter_images_with_only_crowd_annotations(dataset_dicts):
@@ -282,7 +330,7 @@ def get_detection_dataset_dicts(
     if check_consistency and has_instances:
         try:
             class_names = MetadataCatalog.get(names[0]).thing_classes
-            check_metadata_consistency("thing_classes", names)
+            utils.check_metadata_consistency("thing_classes", names)
             print_instances_class_histogram(dataset_dicts, class_names)
         except AttributeError:  # class names are not available for this dataset
             pass
@@ -616,6 +664,46 @@ def _test_loader_from_config(cfg, dataset_name, mapper=None):
         ),
     }
 
+def _wsi_test_loader_from_config(cfg, dataset_name, mapper=None):
+    """
+    Uses the given `dataset_name` argument (instead of the names in cfg), because the
+    standard practice is to evaluate each test set individually (not combining them).
+    """
+    if isinstance(dataset_name, str):
+        dataset_name = [dataset_name]
+
+    dataset = get_detection_dataset_dicts(
+        dataset_name,
+        filter_empty=False,
+        proposal_files=(
+            [
+                cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(x)]
+                for x in dataset_name
+            ]
+            if cfg.MODEL.LOAD_PROPOSALS
+            else None
+        ),
+    )
+    if mapper is None:
+        mapper = DatasetMapper(cfg, False)
+    return {
+        "dataset": dataset,
+        "mapper": mapper,
+        "num_workers": cfg.DATALOADER.NUM_WORKERS,
+        "sampler": (
+            InferenceSampler(len(dataset))
+            if not isinstance(dataset, torchdata.IterableDataset)
+            else None
+        ),
+        "patch_size": cfg.DATASETS.PATCH_SIZE,
+        "step": cfg.DATASETS.STEP,
+        "scale": cfg.DATASETS.SCALE,
+        "prior": cfg.INPUT.PRIOR,
+        "dbscan_thr": cfg.DATASETS.DBSCAN_THR,
+        "min_sample": cfg.DATASETS.MIN_SAMPLE,
+        "expand": cfg.DATASETS.EXPAND,
+    }
+
 
 @configurable(from_config=_test_loader_from_config)
 def build_detection_test_loader(
@@ -686,6 +774,206 @@ def trivial_batch_collator(batch):
     """
     A batch collator that does nothing.
     """
+    return batch
+
+
+@configurable(from_config=_wsi_test_loader_from_config)
+def build_detection_wsi_test_loader(
+    dataset: Union[List[Any], torchdata.Dataset],
+    *,
+    mapper: Callable[[Dict[str, Any]], Any],
+    sampler: Optional[torchdata.Sampler] = None,
+    batch_size: int = 1,
+    num_workers: int = 0,
+    collate_fn: Optional[Callable[[List[Any]], Any]] = None,
+    patch_size: Tuple[int, int],
+    step: float = 0.5,
+    scale: float = 1.0,
+    prior: str = None,
+    dbscan_thr: int = 30,
+    min_sample: int = 1,
+    expand: int = 10,
+) -> torchdata.DataLoader:
+    """
+    Similar to `build_detection_train_loader`, with default batch size = 1,
+    and sampler = :class:`InferenceSampler`. This sampler coordinates all workers
+    to produce the exact set of all samples.
+
+    Args:
+        dataset: a list of dataset dicts,
+            or a pytorch dataset (either map-style or iterable). They can be obtained
+            by using :func:`DatasetCatalog.get` or :func:`get_detection_dataset_dicts`.
+        mapper: a callable which takes a sample (dict) from dataset
+           and returns the format to be consumed by the model.
+           When using cfg, the default choice is ``DatasetMapper(cfg, is_train=False)``.
+        sampler: a sampler that produces
+            indices to be applied on ``dataset``. Default to :class:`InferenceSampler`,
+            which splits the dataset across all workers. Sampler must be None
+            if `dataset` is iterable.
+        batch_size: the batch size of the data loader to be created.
+            Default to 1 image per worker since this is the standard when reporting
+            inference time in papers.
+        num_workers: number of parallel data loading workers
+        collate_fn: same as the argument of `torch.utils.data.DataLoader`.
+            Defaults to do no collation and return a list of data.
+
+    Returns:
+        DataLoader: a torch DataLoader, that loads the given detection
+        dataset, with test-time transformation and batching.
+
+    Examples:
+    ::
+        data_loader = build_detection_test_loader(
+            DatasetRegistry.get("my_test"),
+            mapper=DatasetMapper(...))
+
+        # or, instantiate with a CfgNode:
+        data_loader = build_detection_test_loader(cfg, "my_test")
+    """
+    if isinstance(dataset, list):
+        dataset = DatasetFromList(dataset, copy=False)
+    # if mapper is not None:
+    #     dataset = MapDataset(dataset, mapper)
+
+    if isinstance(dataset, torchdata.IterableDataset):
+        assert sampler is None, "sampler must be None if dataset is IterableDataset"
+    else:
+        if sampler is None:
+            sampler = InferenceSampler(len(dataset))
+    return torchdata.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        drop_last=False,
+        num_workers=num_workers,
+        collate_fn=(lambda batch: wsi_trivial_batch_collator(batch, patch_size, step, scale, prior, dbscan_thr, min_sample, expand)) if collate_fn is None else collate_fn,
+    )
+
+class WSIPatchDataset(torchdata.Dataset):
+    def __init__(self, item,patch_size,step,scale,prior,dbscan_thr, min_sample, expand):
+        self.item = item.copy()
+        self.item.pop("annotations",None)
+        self.patch_size = patch_size
+        self.step = step
+        self.prior = prior
+        self.scale = scale
+        self.dbscan_thr = dbscan_thr
+        self.min_sample = min_sample
+        self.expand = expand
+        # self.preprocess()
+        if self.prior is None:
+            self.sliding_window_operation()
+        else:
+            self.divide_by_prior()
+
+    def __len__(self):
+        return len(self.coordinates)
+
+    def preprocess(self):
+        self.item['image'] = self.item['image'][0].numpy()
+
+        per995 = np.percentile(self.item['image'], 99.5)
+        per005 = np.percentile(self.item['image'], 0.5)
+
+        self.item['image'][self.item['image'] > per995] = per995
+        self.item['image'][self.item['image'] < per005] = per005
+
+        ma = self.item['image'].max()
+        mi = self.item['image'].min()
+        r = ma - mi
+        self.item['image'] = 255.0 * (self.item['image'] - mi) / r + 0.5
+
+        preprocessed = cv2.equalizeHist(self.item['image'].astype(np.uint8))
+        self.item['image'] = torch.tensor(preprocessed[None]).repeat(3,1,1)
+    
+    def sliding_window_operation(self):
+        patch_size = self.patch_size
+        step = self.step
+        shape = [self.item['width'], self.item['height']]
+
+        x_coords = np.arange(0, shape[0], int(patch_size[0]*step))
+        x_coords = x_coords[(x_coords+patch_size[0])<shape[0]]
+        x_coords = np.append(x_coords,shape[0] - patch_size[0])
+        
+        y_coords = np.arange(0, shape[1], int(patch_size[1]*step))
+        y_coords = y_coords[(y_coords+patch_size[1])<shape[1]]
+        y_coords = np.append(y_coords,shape[1] - patch_size[1])
+        
+        x, y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+        self.coordinates = np.stack((x.reshape(-1), y.reshape(-1))).transpose((1,0))
+        self.coordinates = np.hstack((self.coordinates, 
+                                      np.full((self.coordinates.shape[0], 2), self.patch_size),
+                                      np.full((self.coordinates.shape[0], 1), self.scale)))
+    def divide_by_prior(self):
+        try:
+            with open(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.json'),'r') as f:
+                prior = json.load(f)
+            self.coordinates = np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h']] for bbox in prior])
+            self.coordinates = cluster_bboxes_with_dbscan(self.coordinates,self.dbscan_thr,self.min_sample)
+            
+            self.coordinates = np.array([[(bbox[0] + bbox[2] / 2) - (bbox[2]+self.expand) / 2, 
+                             (bbox[1] + bbox[3] / 2) - (bbox[3]+self.expand) / 2, 
+                              (bbox[2]+self.expand), (bbox[3]+self.expand)] for bbox in self.coordinates])
+            
+        except:
+            with h5py.File(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.h5'), 'r') as h5_file:
+                self.coordinates = h5_file['coords'][...]
+            self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 2), self.patch_size)))
+
+        low_limit = [[0, 0]]*len(self.coordinates)
+        high_limit = np.array([self.item['width'] - self.coordinates[:, 2], self.item['height'] - self.coordinates[:, 3]]).transpose((1,0))
+        self.coordinates[:, :2] = np.clip(self.coordinates[:, :2], low_limit, high_limit)
+        
+        self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 1), self.scale)))
+        
+        print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
+        print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
+        print(f"patch number: {len(self.coordinates)}")
+
+    def __getitem__(self, idx):
+        coord = self.coordinates[idx][:-1]
+        patch_scale = self.coordinates[idx][-1]
+        
+        if self.item["file_name"].endswith(".jpg"):
+            image = cv2.imread(self.item["file_name"])
+            patch = image[int(coord[1]):(int(coord[1]+coord[3])),int(coord[0]):(int(coord[0]+coord[2]))]
+        else:
+            image = openslide.open_slide(self.item["file_name"])
+            patch = np.array(image.read_region((int(coord[0]),int(coord[1])),0,(int(coord[2]),int(coord[3]))))[:,:,:-1]
+            
+        scaled_coord = [int(p/patch_scale) for p in coord]
+        patch = cv2.resize(patch, scaled_coord[2:])
+        patch = torch.as_tensor(patch.astype("float32").transpose(2, 0, 1))
+        
+        
+        ret = self.item.copy()
+        
+        ret['image'] = patch
+        ret["wsi_height_level_0"] = self.item["height"]
+        ret["wsi_width_level_0"] = self.item["width"]
+        ret["width"] = scaled_coord[2]
+        ret["height"] = scaled_coord[3]
+        ret['patch_offset'] = scaled_coord[:2]
+        ret['patch_scale'] = coord[3]/scaled_coord[3]
+        ret['image_id'] = self.item['image_id']+'_'+str(idx)
+
+        return ret
+
+
+
+def wsi_trivial_batch_collator(batch, patch_size=[1000,1000], step=0.5, scale=1.0, prior=None, dbscan_thr=30, min_sample=1, expand=10):#1000
+    for id in range(len(batch)):  
+        dataset = WSIPatchDataset(batch[id],patch_size=patch_size,step=step,scale=scale, prior=prior, dbscan_thr=dbscan_thr, min_sample=min_sample, expand=expand)
+        dataloader = torchdata.DataLoader(
+            dataset,
+            batch_size=len(batch),
+            drop_last=False,
+            num_workers=1,
+            collate_fn=trivial_batch_collator,
+        )
+        batch[id]['dataloader'] = dataloader
+
     return batch
 
 

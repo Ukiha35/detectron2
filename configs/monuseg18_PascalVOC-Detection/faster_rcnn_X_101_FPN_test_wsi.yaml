@@ -1,0 +1,36 @@
+_BASE_: "../Base-RCNN-FPN.yaml"
+MODEL:
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres/model_final.pth"
+  PIXEL_STD: [47.49, 41.63, 51.28]
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 101
+    STRIDE_IN_1X1: False  # this is a C2 model
+    NUM_GROUPS: 32
+    WIDTH_PER_GROUP: 8
+  ROI_HEADS:
+    NUM_CLASSES: 1
+    SCORE_THRESH_TEST: 0.05
+    NMS_THRESH_TEST: 0.5
+  ROI_BOX_HEAD:
+    NUM_FC: 2
+    NUM_CONV: 0
+  ANCHOR_GENERATOR:
+    SIZES: [[16], [24], [32], [48]]  # One size for each in feature map
+    ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+  RPN:
+    IN_FEATURES: ["p2", "p3", "p4", "p5"]
+INPUT:
+  PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 250/patches/" #######################
+
+DATASETS:
+  TEST: ('voc_2007_wsi',)
+  FINAL_NMS_THR: 0.1
+  SCALE: 1.0
+  PATCH_SIZE: (250,250)
+  STEP: 0.5
+
+TEST:
+  DETECTIONS_PER_IMAGE: 150
+
+SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_wsi_fullres/" #######################

@@ -14,10 +14,16 @@ __all__ = ["load_voc_instances", "register_pascal_voc"]
 
 
 # fmt: off
+# CLASS_NAMES = (
+#     "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
+#     "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+#     "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+# )
+# CLASS_NAMES = (
+#     "particle",
+# )
 CLASS_NAMES = (
-    "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
-    "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
-    "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+    "nuclear",
 )
 # fmt: on
 
@@ -33,14 +39,18 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
     """
     with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
         fileids = np.loadtxt(f, dtype=str)
+    if fileids.shape == ():
+        fileids = fileids.reshape((1,))
 
     # Needs to read many small annotation files. Makes sense at local
     annotation_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations/"))
     dicts = []
     for fileid in fileids:
         anno_file = os.path.join(annotation_dirname, fileid + ".xml")
-        jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
-
+        if fileid.endswith("_wsi"):
+            jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".svs")
+        else:
+            jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
         with PathManager.open(anno_file) as f:
             tree = ET.parse(f)
 
@@ -50,6 +60,10 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
             "height": int(tree.findall("./size/height")[0].text),
             "width": int(tree.findall("./size/width")[0].text),
         }
+        
+        if tree.find("./roi") != None:
+            r["roi"] = [[float(bbox.find(x).text) for x in ["xmin", "ymin", "xmax", "ymax"]] for bbox in tree.findall(".roi/bndbox")]
+        
         instances = []
 
         for obj in tree.findall("object"):

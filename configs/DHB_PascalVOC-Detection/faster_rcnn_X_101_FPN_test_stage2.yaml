@@ -1,0 +1,46 @@
+_BASE_: "../Base-RCNN-FPN.yaml"
+MODEL:
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/DHB_pos_large_anchor/model_final.pth"
+  PIXEL_STD: [57.375, 57.120, 58.395]
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 101
+    STRIDE_IN_1X1: False  # this is a C2 model
+    NUM_GROUPS: 32
+    WIDTH_PER_GROUP: 8
+  ROI_HEADS:
+    NUM_CLASSES: 1
+    SCORE_THRESH_TEST: 0.05 #######################
+    NMS_THRESH_TEST: 0.5 #######################
+  ROI_BOX_HEAD:
+    NUM_FC: 2
+    NUM_CONV: 0
+  # ANCHOR_GENERATOR:
+  #   SIZES: [[24], [32], [48], [64], [128]]  # One size for each in feature map
+  #   ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+INPUT:
+  MIN_SIZE_TRAIN: (1000,)
+  MIN_SIZE_TEST: 1000
+  MAX_SIZE_TRAIN: 1000
+  MAX_SIZE_TEST: 1000
+  CROP:
+    ENABLED: False
+  PRIOR: "/home/ps/ltc/detectron2/experiments_output/DHB_lowres_pos/conf_thr_9e-12_SCALE_5_step_1.0_patch_size_1000_1000/" #######################
+
+DATASETS:
+  TRAIN: ('voc_2007_trainval',)
+  TEST: ('voc_2007_test',)
+  FINAL_NMS_THR: 0.1 #######################
+  PATCH_SIZE: (1000,1000) #######################
+  STEP: 0.5 #######################
+  LEVEL: 20 #######################
+
+SOLVER:
+  STEPS: (60000,)  # 学习率衰减点调整到原来的 2 倍
+  MAX_ITER: 80000  # 翻倍，保证总训练量一致
+  WARMUP_ITERS: 200  # 可适当增加，避免过大的初始波动
+  IMS_PER_BATCH: 2  # 单 GPU 训练，batch size 减半
+  BASE_LR: 0.0025  # 学习率减半，适配 batch size
+
+OUTPUT_DIR: "/home/ps/ltc/detectron2/experiments/DHB_pos_large_anchor/" #######################
+SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/DHB_lowres_pos/conf_thr_9e-12_SCALE_5_step_1.0_patch_size_1000_1000/stage2" #######################
