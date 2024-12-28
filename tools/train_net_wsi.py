@@ -158,7 +158,7 @@ def build_evaluator(cfg, dataset_name, output_folder=None):
         return CityscapesSemSegEvaluator(dataset_name)
     elif evaluator_type == "pascal_voc":
         # return PascalVOCDetectionEvaluator(dataset_name)
-        return PascalVOCDetectionEvaluator(dataset_name, cfg.DATASETS.SCALE, cfg.DATASETS.FINAL_NMS_THR, cfg.DATASETS.AXIS_THR, cfg.DATASETS.AREA_THR)
+        return PascalVOCDetectionEvaluator(dataset_name, cfg.DATASETS.POST_PROCESS)
     elif evaluator_type == "lvis":
         return LVISEvaluator(dataset_name, output_dir=output_folder)
     if len(evaluator_list) == 0:
@@ -278,6 +278,12 @@ class WSITrainer(DefaultTrainer):
 
         if len(results) == 1:
             results = list(results.values())[0]
+        
+        if 'wsi' in cfg.DATASETS.TEST:
+            os.system(f"python /home/ps/ltc/monuseg18/data/vis_wsi.py --pred_label_path {save_dir}")
+        else:
+            os.system(f"python /home/ps/ltc/monuseg18/data/vis.py --pred_label_path {save_dir}")
+
         return results
     
 
@@ -295,7 +301,7 @@ def setup(args):
 
 def main(args):        
     cfg = setup(args)
-    args.save_dir = os.path.join(cfg.SAVE_DIR, f"conf_thr_{cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST}_SCALE_{cfg.DATASETS.SCALE}_step_{cfg.DATASETS.STEP}_patch_size_{cfg.DATASETS.PATCH_SIZE[0]}_{cfg.DATASETS.PATCH_SIZE[1]}_{cfg.MODEL.WEIGHTS.split('/')[-1].split('.pth')[0]}")
+    args.save_dir = os.path.join(cfg.SAVE_DIR, f"conf_thr_{cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST}_SCALE_{cfg.DATASETS.CLUSTER_PARAMETER.SCALE}_step_{cfg.DATASETS.CLUSTER_PARAMETER.STEP}_axis_{cfg.DATASETS.POST_PROCESS.AXIS_THR}_area_{cfg.DATASETS.POST_PROCESS.AREA_THR}_patch_size_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[0]}_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[1]}_{cfg.MODEL.WEIGHTS.split('/')[-1].split('.pth')[0]}")
 
     # register_dataset()
     if args.eval_only:
@@ -329,13 +335,13 @@ def invoke_main() -> None:
     args = default_argument_parser().parse_args()
     args.GPU = '0'
     
-    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
-    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_test.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_stage2.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_wsi.yaml"
-    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test_wsi.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test_wsi.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_test.yaml"
     args.eval_only = True
 
 

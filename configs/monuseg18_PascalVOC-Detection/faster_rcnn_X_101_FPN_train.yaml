@@ -31,7 +31,10 @@ INPUT:
 DATASETS:
   TRAIN: ('voc_2007_trainval',)
   TEST: ('voc_2007_val',)
-
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 10.0
+    AREA_THR: 100.0
 SOLVER:
   GAMMA: 0.96
   STEPS: (1500,2000,2500)  # 学习率衰减点调整到原来的 2 倍

@@ -21,19 +21,23 @@ MODEL:
   RPN:
     IN_FEATURES: ["p2", "p3", "p4", "p5"]
 
+INPUT:
+  MIN_SIZE_TEST: 0
+
 DATASETS:
   TEST: ('voc_2007_wsi',)
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 5.0
+    AREA_THR: 50.0
+  CLUSTER_PARAMETER:
+    DBSCAN_THR: 40
+    MIN_SAMPLE: 2
+    EXPAND: 10
   SCALE: 1.0
-  FINAL_NMS_THR: 0.5
-  DBSCAN_THR: 30
-  MIN_SAMPLE: 2
-  EXPAND: 10
-  AXIS_THR: 10.0
-  AREA_THR: 100.0
-  
 TEST:
   EXPECTED_RESULTS: [['bbox', 'AP', 0, 100]]
   EVAL_PERIOD: 5000
   DETECTIONS_PER_IMAGE: 150
 
-SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_wsi_fullres_stage2/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres_stage2/" #######################

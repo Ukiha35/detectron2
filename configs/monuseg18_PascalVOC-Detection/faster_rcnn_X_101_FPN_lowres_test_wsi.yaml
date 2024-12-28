@@ -35,17 +35,22 @@ MODEL:
     # IN_FEATURES: ["p2", "p3", "p4"]
     # IN_FEATURES: ["p2", "p3", "p4"]
     # IN_FEATURES: ["p2", "p3", "p4"]
+
 INPUT:
-  PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
+  MIN_SIZE_TEST: 0
 
 DATASETS:
   TEST: ('voc_2007_wsi',)
-  FINAL_NMS_THR: 0.1
-  SCALE: 2.0
-
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 5.0
+    AREA_THR: 50.0
+  CLUSTER_PARAMETER:
+    PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
+    SCALE: 2.0
 
 TEST:
   DETECTIONS_PER_IMAGE: 2000
 
-SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_wsi_lowres_small/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_lowres_small/" #######################
   

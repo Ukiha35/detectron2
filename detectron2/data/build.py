@@ -28,12 +28,14 @@ from .samplers import (
     RepeatFactorTrainingSampler,
     TrainingSampler,
 )
+from fvcore.common.config import CfgNode
 from sklearn.cluster import DBSCAN
 import cv2
 import os
 import json
 import openslide
 import h5py
+from torchvision.ops import nms
 
 """
 This file contains the default logic to build a dataloader for training or testing.
@@ -47,8 +49,191 @@ __all__ = [
     "get_detection_dataset_dicts",
     "load_proposals_into_dataset",
     "print_instances_class_histogram",
+    "fast_nmm",
+    "fast_nms",
+    "expand_bboxes",
+    "clip_bboxes",
+    "adjust_bboxes",
+    "cluster_bboxes_with_dbscan",
+    "draw_bboxes",
+    
 ]
 
+
+def fast_nmm(bbox_list, iou_threshold):
+    """
+    Apply Non-Maximum Merging (NMM) for bounding boxes.
+
+    Args:
+        bbox_list (list): A list of bounding boxes with scores. Each element is [xmin, ymin, xmax, ymax, score].
+        iou_threshold (float): IoU threshold for merging boxes.
+
+    Returns:
+        torch.Tensor: The merged bounding boxes with their scores (shape: M, 5).
+        List[dict]: Detailed information of merged clusters, including each retained box
+                    and its associated child boxes.
+    """
+    # Convert input list to a PyTorch tensor
+    bbox_list = torch.tensor(bbox_list, dtype=torch.float32)
+    bbox_list[:, 2] += bbox_list[:, 0]  # Convert width to xmax
+    bbox_list[:, 3] += bbox_list[:, 1]  # Convert height to ymax
+    
+    if len(bbox_list) == 0:
+        return torch.empty((0, 5)), []
+
+    # Sort boxes by scores in descending order
+    scores = bbox_list[:, 4]
+    _, idxs = scores.sort(descending=True)
+    bbox_list = bbox_list[idxs]
+
+    # Extract box coordinates and areas
+    x1 = bbox_list[:, 0]
+    y1 = bbox_list[:, 1]
+    x2 = bbox_list[:, 2]
+    y2 = bbox_list[:, 3]
+    scores = bbox_list[:, 4]
+    areas = (x2 - x1) * (y2 - y1)
+
+    # Initialize output structures
+    merged_boxes = []
+    clusters = []
+    
+    while len(bbox_list) > 0:
+        # Take the box with the highest score as the "retained box"
+        retained_box = bbox_list[0]
+
+        # Compute IoU with the rest of the boxes
+        xx1 = torch.maximum(retained_box[0], x1)
+        yy1 = torch.maximum(retained_box[1], y1)
+        xx2 = torch.minimum(retained_box[2], x2)
+        yy2 = torch.minimum(retained_box[3], y2)
+
+        w = torch.maximum(torch.tensor(0.0), xx2 - xx1)
+        h = torch.maximum(torch.tensor(0.0), yy2 - yy1)
+        intersection = w * h
+        
+        # iou = intersection / (areas + areas[0] - intersection)
+        iou = intersection / torch.minimum(areas, areas[0])
+        
+        # Find boxes to merge based on IoU threshold
+        merge_idxs = (iou > iou_threshold).nonzero(as_tuple=True)[0]
+
+        # Compute the union box for the retained box and merged boxes
+        merged_x1 = torch.min(x1[merge_idxs])
+        merged_y1 = torch.min(y1[merge_idxs])
+        merged_x2 = torch.max(x2[merge_idxs])
+        merged_y2 = torch.max(y2[merge_idxs])
+
+        # Update the merged box
+        merged_box = torch.tensor([merged_x1, merged_y1, merged_x2-merged_x1, merged_y2-merged_y1, retained_box[4]])
+        merged_boxes.append(merged_box)
+
+        # Store cluster information
+        tmp_bbox_list = bbox_list[merge_idxs]
+        tmp_bbox_list[:,2:4] = tmp_bbox_list[:,2:4] - tmp_bbox_list[:,0:2]
+        cluster_info = {
+            "cluster": [merged_x1.item(), merged_y1.item(), merged_x2.item()-merged_x1.item(), merged_y2.item()-merged_y1.item()],
+            "children": tmp_bbox_list.tolist()
+        }
+        clusters.append(cluster_info)
+
+        # Remove merged boxes from the list
+        bbox_list = bbox_list[(iou <= iou_threshold)]
+        x1 = bbox_list[:, 0]
+        y1 = bbox_list[:, 1]
+        x2 = bbox_list[:, 2]
+        y2 = bbox_list[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+
+    # Convert merged boxes to a tensor
+    merged_boxes = (torch.stack(merged_boxes) if len(merged_boxes) > 0 else torch.empty((0, 5))).numpy()
+    return merged_boxes, clusters
+
+def fast_nms(bbox_list, thresh):
+    """
+    Apply Non-Maximum Suppression (NMS) using PyTorch's GPU-accelerated implementation.
+    
+    Args:
+        instances (Instances): an Instances object containing fields such as `pred_boxes`, `scores`, and `pred_classes`.
+        thresh (float): NMS threshold, only detections with IoU < threshold will be kept.
+        
+    Returns:
+        Instances: a new Instances object containing the detections after NMS.
+    """
+    if thresh < 0 or thresh > 1:
+        return bbox_list
+    
+    # Extract fields
+    dets = bbox_list[:,:4]  # Tensor of shape (N, 4) -> (xmin, ymin, xmax, ymax)
+    scores = bbox_list[:,4]  # Tensor of shape (N, ) -> detection scores
+    
+    # Use PyTorch's built-in NMS function
+    keep = nms(torch.tensor(dets), torch.tensor(scores), thresh)  # Returns the indices of boxes to keep
+    
+    # Filter instances to keep only the selected detections
+    new_bbox_list = bbox_list[keep]
+    
+    return new_bbox_list
+
+def expand_bboxes(coordinates,expand=5, size_limit=[0,0,1000,1000]):
+    coordinates = np.array([[bbox[0] - expand,  bbox[1] - expand, 
+                        (bbox[2]+2*expand), (bbox[3]+2*expand), bbox[4]] for bbox in coordinates])
+    return clip_bboxes(coordinates,size_limit=size_limit)
+
+def clip_bboxes(coordinates, size_limit=[0,0,1000,1000]):
+    coordinates[:, 2:4] = coordinates[:, 2:4] + coordinates[:, 0:2]
+    
+    coordinates[:, 0:2] = np.clip(coordinates[:, 0:2], [size_limit[0], size_limit[1]], [size_limit[0]+size_limit[2], size_limit[1]+size_limit[3]])
+    coordinates[:, 2:4] = np.clip(coordinates[:, 2:4], [size_limit[0], size_limit[1]], [size_limit[0]+size_limit[2], size_limit[1]+size_limit[3]])
+    
+    coordinates[:, 2:4] = coordinates[:, 2:4] - coordinates[:, 0:2]
+    
+    return coordinates[np.bitwise_and(coordinates[:,3]>0, coordinates[:,2]>0)]
+
+def adjust_patches(coordinates, max_size=(500,500), min_size=(100,100), target_size=(300,300),size_limit=(0,0,1000,1000)):
+        """
+        Adjust patch sizes by splitting large patches, expanding small patches, 
+        and resizing moderate-sized patches to a target size.
+
+        Args:
+            coordinates (np.array): Array of patch coordinates (x, y, w, h).
+            max_size (tuple): Maximum width and height (w, h) of a patch.
+            min_size (tuple): Minimum width and height (w, h) of a patch.
+            target_size (tuple): Target width and height (w, h) to resize patches to.
+
+        Returns:
+            np.array: Adjusted patch coordinates.
+        """
+        final_patches = []
+        for patch in coordinates:
+            # 1. Expand small patches
+            x, y, w, h, score = patch
+            if w < min_size[0] or h < min_size[1]:
+                new_w = max(w, min_size[0])
+                new_h = max(h, min_size[1])
+                new_x = x - (new_w - w) / 2
+                new_y = y - (new_h - h) / 2
+                expanded_patch = clip_bboxes(np.array([[new_x, new_y, new_w, new_h, score]]),size_limit=size_limit)[0]
+            else:
+                expanded_patch = [x, y, w, h, score]
+                
+            # 2. Split large patches
+            x, y, w, h, score = expanded_patch
+            if w > max_size[0] or h > max_size[1]:
+                num_x = int(np.ceil(w / target_size[0]))
+                num_y = int(np.ceil(h / target_size[1]))
+                sub_w = w / num_x
+                sub_h = h / num_y
+                for i in range(num_x):
+                    for j in range(num_y):
+                        sub_x = x + i * sub_w
+                        sub_y = y + j * sub_h
+                        final_patches.append([sub_x, sub_y, sub_w, sub_h, score]) 
+            else:
+                final_patches.append([x, y, w, h, score])
+            
+
+        return np.array(final_patches)
 
 def cluster_bboxes_with_dbscan(coordinates, distance_threshold=50, min_samples=1):
     """
@@ -82,9 +267,10 @@ def cluster_bboxes_with_dbscan(coordinates, distance_threshold=50, min_samples=1
         y_min = np.min(cluster_boxes[:, 1])
         x_max = np.max(cluster_boxes[:, 0] + cluster_boxes[:, 2])
         y_max = np.max(cluster_boxes[:, 1] + cluster_boxes[:, 3])
+        score = np.mean(cluster_boxes[:,4])
         
         # 父类框：[x, y, w, h]
-        parent_boxes.append([x_min, y_min, x_max - x_min, y_max - y_min])
+        parent_boxes.append([x_min, y_min, x_max - x_min, y_max - y_min, score])
     
     return np.array(parent_boxes)
 
@@ -684,24 +870,16 @@ def _wsi_test_loader_from_config(cfg, dataset_name, mapper=None):
             else None
         ),
     )
-    if mapper is None:
-        mapper = DatasetMapper(cfg, False)
     return {
         "dataset": dataset,
-        "mapper": mapper,
         "num_workers": cfg.DATALOADER.NUM_WORKERS,
         "sampler": (
             InferenceSampler(len(dataset))
             if not isinstance(dataset, torchdata.IterableDataset)
             else None
         ),
-        "patch_size": cfg.DATASETS.PATCH_SIZE,
-        "step": cfg.DATASETS.STEP,
-        "scale": cfg.DATASETS.SCALE,
-        "prior": cfg.INPUT.PRIOR,
-        "dbscan_thr": cfg.DATASETS.DBSCAN_THR,
-        "min_sample": cfg.DATASETS.MIN_SAMPLE,
-        "expand": cfg.DATASETS.EXPAND,
+        "cluster_parameter": cfg.DATASETS.CLUSTER_PARAMETER,
+        "bg_value": cfg.MODEL.PIXEL_MEAN,
     }
 
 
@@ -781,18 +959,12 @@ def trivial_batch_collator(batch):
 def build_detection_wsi_test_loader(
     dataset: Union[List[Any], torchdata.Dataset],
     *,
-    mapper: Callable[[Dict[str, Any]], Any],
     sampler: Optional[torchdata.Sampler] = None,
     batch_size: int = 1,
     num_workers: int = 0,
     collate_fn: Optional[Callable[[List[Any]], Any]] = None,
-    patch_size: Tuple[int, int],
-    step: float = 0.5,
-    scale: float = 1.0,
-    prior: str = None,
-    dbscan_thr: int = 30,
-    min_sample: int = 1,
-    expand: int = 10,
+    cluster_parameter: CfgNode,
+    bg_value: list = [0.0, 0.0, 0.0],
 ) -> torchdata.DataLoader:
     """
     Similar to `build_detection_train_loader`, with default batch size = 1,
@@ -832,8 +1004,6 @@ def build_detection_wsi_test_loader(
     """
     if isinstance(dataset, list):
         dataset = DatasetFromList(dataset, copy=False)
-    # if mapper is not None:
-    #     dataset = MapDataset(dataset, mapper)
 
     if isinstance(dataset, torchdata.IterableDataset):
         assert sampler is None, "sampler must be None if dataset is IterableDataset"
@@ -846,20 +1016,27 @@ def build_detection_wsi_test_loader(
         sampler=sampler,
         drop_last=False,
         num_workers=num_workers,
-        collate_fn=(lambda batch: wsi_trivial_batch_collator(batch, patch_size, step, scale, prior, dbscan_thr, min_sample, expand)) if collate_fn is None else collate_fn,
+        collate_fn=(lambda batch: wsi_trivial_batch_collator(batch, cluster_parameter=cluster_parameter, bg_value=bg_value)) if collate_fn is None else collate_fn,
     )
 
+    # patch_size=[1000,1000], step=0.5, dbscan_thr=30, min_sample=1, expand=10
+
 class WSIPatchDataset(torchdata.Dataset):
-    def __init__(self, item,patch_size,step,scale,prior,dbscan_thr, min_sample, expand):
+    def __init__(self, item, cluster_parameter, bg_value):
         self.item = item.copy()
         self.item.pop("annotations",None)
-        self.patch_size = patch_size
-        self.step = step
-        self.prior = prior
-        self.scale = scale
-        self.dbscan_thr = dbscan_thr
-        self.min_sample = min_sample
-        self.expand = expand
+        self.patch_size = cluster_parameter.PATCH_SIZE
+        self.step = cluster_parameter.STEP
+        self.prior = cluster_parameter.PRIOR
+        self.scale = cluster_parameter.SCALE
+        # self.dbscan_thr = cluster_parameter.DBSCAN_THR
+        # self.min_sample = cluster_parameter.MIN_SAMPLE
+        self.expand = cluster_parameter.EXPAND
+        self.adjust_parameter = cluster_parameter.ADJUST_PARAMETER
+        self.nmm_thr = cluster_parameter.NMM_THR
+        self.border = cluster_parameter.BORDER
+        self.canvas_size = cluster_parameter.CANVAS_SIZE
+        self.bg_value = bg_value
         # self.preprocess()
         if self.prior is None:
             self.sliding_window_operation()
@@ -893,78 +1070,106 @@ class WSIPatchDataset(torchdata.Dataset):
 
         x_coords = np.arange(0, shape[0], int(patch_size[0]*step))
         x_coords = x_coords[(x_coords+patch_size[0])<shape[0]]
-        x_coords = np.append(x_coords,shape[0] - patch_size[0])
+        x_coords = np.append(x_coords,shape[0] - patch_size[0]).astype(float)
         
         y_coords = np.arange(0, shape[1], int(patch_size[1]*step))
         y_coords = y_coords[(y_coords+patch_size[1])<shape[1]]
-        y_coords = np.append(y_coords,shape[1] - patch_size[1])
+        y_coords = np.append(y_coords,shape[1] - patch_size[1]).astype(float)
         
         x, y = np.meshgrid(x_coords, y_coords, indexing='ij')
 
         self.coordinates = np.stack((x.reshape(-1), y.reshape(-1))).transpose((1,0))
         self.coordinates = np.hstack((self.coordinates, 
-                                      np.full((self.coordinates.shape[0], 2), self.patch_size),
-                                      np.full((self.coordinates.shape[0], 1), self.scale)))
+                                      np.full((self.coordinates.shape[0], 2), self.patch_size)))
+        
+        self.coordinates_in_patch = self.coordinates.copy()
+        self.coordinates_in_patch[:,:2] = 0
+        self.coordinates_in_patch[:,2:] /= self.scale
+        
+        self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+        
     def divide_by_prior(self):
         try:
             with open(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.json'),'r') as f:
                 prior = json.load(f)
-            self.coordinates = np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h']] for bbox in prior])
-            self.coordinates = cluster_bboxes_with_dbscan(self.coordinates,self.dbscan_thr,self.min_sample)
+            self.coordinates = np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h'], bbox['score']] for bbox in prior])
             
-            self.coordinates = np.array([[(bbox[0] + bbox[2] / 2) - (bbox[2]+self.expand) / 2, 
-                             (bbox[1] + bbox[3] / 2) - (bbox[3]+self.expand) / 2, 
-                              (bbox[2]+self.expand), (bbox[3]+self.expand)] for bbox in self.coordinates])
+            self.coordinates = expand_bboxes(self.coordinates,self.expand,[0,0,self.item['width'],self.item['width']])
             
+            for thr in self.nmm_thr:
+                self.coordinates, _ = fast_nmm(self.coordinates, iou_threshold=thr)
+                
+            # self.coordinates = cluster_bboxes_with_dbscan(self.coordinates,self.dbscan_thr,self.min_sample)
+            
+            # self.coordinates = adjust_patches(self.coordinates, max_size=self.adjust_parameter.MAX_SIZE, min_size=self.adjust_parameter.MIN_SIZE, target_size=self.adjust_parameter.TARGET_SIZE,size_limit=[self.item['width'],self.item['width']])
+                        
+            self.coordinates = expand_bboxes(self.coordinates,self.border,[0,0,self.item['width'],self.item['width']])
+            
+            self.coordinates = self.coordinates[:,:-1]
         except:
             with h5py.File(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.h5'), 'r') as h5_file:
                 self.coordinates = h5_file['coords'][...]
             self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 2), self.patch_size)))
 
-        low_limit = [[0, 0]]*len(self.coordinates)
-        high_limit = np.array([self.item['width'] - self.coordinates[:, 2], self.item['height'] - self.coordinates[:, 3]]).transpose((1,0))
-        self.coordinates[:, :2] = np.clip(self.coordinates[:, :2], low_limit, high_limit)
+        draw_bboxes(self.item["file_name"],np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h']] for bbox in prior]),self.coordinates,"/media/ps/passport1/ltc/monuseg18/test_prior")
         
-        self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 1), self.scale)))
+        self.coordinates_in_patch = self.coordinates.copy()
+        self.coordinates_in_patch[:,:2] = 0
+        self.coordinates_in_patch[:,2:] /= self.scale
+
+        self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+
         
         print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
+        print(f"mean patch size:{int(self.coordinates[:,2].mean()), int(self.coordinates[:,3].mean())}")
         print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
         print(f"patch number: {len(self.coordinates)}")
-
+        print()
+        
     def __getitem__(self, idx):
-        coord = self.coordinates[idx][:-1]
-        patch_scale = self.coordinates[idx][-1]
+        ids = np.where(self.canvas_id==idx)[0]
+        
+        coord = self.coordinates[ids].astype(int)
+        coord_in_patch = self.coordinates_in_patch[ids].astype(int)
+        
+        if self.canvas_size == None:
+            canvas_size = ((coord_in_patch[:,0]+coord_in_patch[:,2]).max(), (coord_in_patch[:,1]+coord_in_patch[:,3]).max())
+        else:
+            canvas_size = self.canvas_size
+            
+        canvas = np.ones((canvas_size[1], canvas_size[0], 3)) * self.bg_value
         
         if self.item["file_name"].endswith(".jpg"):
             image = cv2.imread(self.item["file_name"])
-            patch = image[int(coord[1]):(int(coord[1]+coord[3])),int(coord[0]):(int(coord[0]+coord[2]))]
+            for cp, c in zip(coord_in_patch, coord):
+                patch = image[c[1]:(c[1]+c[3]),c[0]:(c[0]+c[2])]
+                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = cv2.resize(patch, cp[2:])
         else:
             image = openslide.open_slide(self.item["file_name"])
-            patch = np.array(image.read_region((int(coord[0]),int(coord[1])),0,(int(coord[2]),int(coord[3]))))[:,:,:-1]
+            for cp, c in zip(coord_in_patch, coord):
+                patch = np.array(image.read_region((coord[0],coord[1]),0,(coord[2],coord[3])))[:,:,:-1]
+                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = cv2.resize(patch, cp[2:])
             
-        scaled_coord = [int(p/patch_scale) for p in coord]
-        patch = cv2.resize(patch, scaled_coord[2:])
-        patch = torch.as_tensor(patch.astype("float32").transpose(2, 0, 1))
+        canvas = torch.as_tensor(canvas.astype("float32").transpose(2, 0, 1))
         
         
         ret = self.item.copy()
         
-        ret['image'] = patch
-        ret["wsi_height_level_0"] = self.item["height"]
-        ret["wsi_width_level_0"] = self.item["width"]
-        ret["width"] = scaled_coord[2]
-        ret["height"] = scaled_coord[3]
-        ret['patch_offset'] = scaled_coord[:2]
-        ret['patch_scale'] = coord[3]/scaled_coord[3]
+        ret['image'] = canvas
+        ret["width"] = canvas_size[0]
+        ret["height"] = canvas_size[1]
+        ret['coord'] = coord
+        ret['coord_in_patch'] = coord_in_patch
         ret['image_id'] = self.item['image_id']+'_'+str(idx)
+        # ret['border'] = self.border
 
         return ret
 
 
 
-def wsi_trivial_batch_collator(batch, patch_size=[1000,1000], step=0.5, scale=1.0, prior=None, dbscan_thr=30, min_sample=1, expand=10):#1000
+def wsi_trivial_batch_collator(batch, cluster_parameter, bg_value):
     for id in range(len(batch)):  
-        dataset = WSIPatchDataset(batch[id],patch_size=patch_size,step=step,scale=scale, prior=prior, dbscan_thr=dbscan_thr, min_sample=min_sample, expand=expand)
+        dataset = WSIPatchDataset(batch[id], cluster_parameter=cluster_parameter, bg_value=bg_value)
         dataloader = torchdata.DataLoader(
             dataset,
             batch_size=len(batch),
@@ -980,3 +1185,37 @@ def wsi_trivial_batch_collator(batch, patch_size=[1000,1000], step=0.5, scale=1.
 def worker_init_reset_seed(worker_id):
     initial_seed = torch.initial_seed() % 2**31
     seed_all_rng(initial_seed + worker_id)
+
+
+
+def draw_bboxes(image_path, green_bboxes, red_bboxes, output_path):
+    """
+    Draw bounding boxes on an image and save the result.
+    
+    Args:
+        image_path (str): Path to the input image (jpg format).
+        green_bboxes (list): List of green bounding boxes. Each box is [x_min, y_min, x_max, y_max].
+        red_bboxes (list): List of red bounding boxes. Each box is [x_min, y_min, x_max, y_max].
+        output_path (str): Path to save the output image.
+    """
+    # Load the image
+    image = cv2.imread(image_path)
+    
+    if image is None:
+        raise ValueError(f"Image not found at {image_path}")
+    
+    # Draw green bounding boxes
+    for bbox in green_bboxes.astype(int):
+        x_min, y_min, w, h = bbox
+        cv2.rectangle(image, (x_min, y_min), (x_min+w, y_min+h), (0, 255, 0), 2)  # Green color, thickness=2
+
+    # Draw red bounding boxes
+    for bbox in red_bboxes.astype(int):
+        x_min, y_min, w, h = bbox
+        cv2.rectangle(image, (x_min, y_min), (x_min+w, y_min+h), (0, 0, 255), 2)  # Red color, thickness=2
+
+    # Save the output image
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    cv2.imwrite(os.path.join(output_path,os.path.basename(image_path)), image)
+    print(f"Saved output image with bounding boxes to {output_path}")

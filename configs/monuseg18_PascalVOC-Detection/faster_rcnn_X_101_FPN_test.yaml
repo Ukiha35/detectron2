@@ -21,14 +21,21 @@ MODEL:
   RPN:
     IN_FEATURES: ["p2", "p3", "p4", "p5"]
 
+INPUT:
+  MIN_SIZE_TEST: 0
+
 DATASETS:
   TEST: ('voc_2007_test',)
-  FINAL_NMS_THR: 0.1
-  SCALE: 1.0
-  PATCH_SIZE: (250,250)
-  STEP: 0.5
-
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 0.0
+    AREA_THR: 0.0
+  CLUSTER_PARAMETER:
+    PATCH_SIZE: (250,250)
+    STEP: 0.5
+    SCALE: 1.0
+  
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_fullres/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres/" #######################

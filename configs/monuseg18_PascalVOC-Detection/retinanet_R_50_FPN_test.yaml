@@ -1,0 +1,42 @@
+_BASE_: "../Base-RetinaNet.yaml"
+MODEL:
+  WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
+  PIXEL_STD: [47.49, 41.63, 51.28]
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 50
+  RETINANET:
+    IN_FEATURES: ["p3", "p4", "p5", "p6", "p7"]
+    NUM_CLASSES: 1
+    SCORE_THRESH_TEST: 0.05
+    NMS_THRESH_TEST: 0.5
+    TOPK_CANDIDATES_TEST: 1000
+  FPN:
+    IN_FEATURES: ["res3", "res4", "res5"]
+  ANCHOR_GENERATOR:
+    SIZES: !!python/object/apply:eval ["[[x, x * 2**(1.0/3), x * 2**(2.0/3) ] for x in [8, 16, 24, 32, 48]]"]
+    ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+INPUT:
+  MIN_SIZE_TRAIN: (250,240,230,220,210,200)
+  MAX_SIZE_TRAIN: 250
+  CROP:
+    ENABLED: False
+
+DATASETS:
+  TEST: ('voc_2007_test',)
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 0.0
+    AREA_THR: 0.0
+  CLUSTER_PARAMETER:
+    PATCH_SIZE: (500,500)
+    STEP: 0.5
+    SCALE: 1.0
+  
+TEST:
+  DETECTIONS_PER_IMAGE: 500
+
+SAVE_DIR: "/home/ps/ltc/detectron2/experiments_outputs/monuseg18_retinanet_fullres/" #######################
+
+
+

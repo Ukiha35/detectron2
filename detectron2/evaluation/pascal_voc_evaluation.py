@@ -19,6 +19,7 @@ from torchvision.ops import nms
 from .evaluator import DatasetEvaluator
 from tqdm import tqdm
 from detectron2.structures import Instances
+import openslide
 
 
 def bbox_iou(bbox_patch, bbox_roi):
@@ -93,7 +94,7 @@ def filter_bboxes_by_roi(splitlines, rois, imagenames, threshold=0.5):
 
 def fast_nms(instances, thresh):
     """
-    Apply Non-Maximum Suppression (NMS) using PyTorch's GPU-accelerated implementation.
+    Apply Non-Maximum Suppression (NMS) manually using PyTorch operations.
     
     Args:
         instances (Instances): an Instances object containing fields such as `pred_boxes`, `scores`, and `pred_classes`.
@@ -104,18 +105,51 @@ def fast_nms(instances, thresh):
     """
     if thresh < 0 or thresh > 1:
         return instances
-    
+
     # Extract fields
     dets = instances.pred_boxes.tensor  # Tensor of shape (N, 4) -> (xmin, ymin, xmax, ymax)
     scores = instances.scores  # Tensor of shape (N, ) -> detection scores
-    
-    # Use PyTorch's built-in NMS function
-    keep = nms(dets, scores, thresh)  # Returns the indices of boxes to keep
-    
-    # Filter instances to keep only the selected detections
-    new_instances = instances[keep]
-    
+
+    # Sort by scores in descending order
+    order = scores.argsort(descending=True)
+    dets = dets[order]
+    scores = scores[order]
+
+    keep = []  # Indices of boxes to keep
+
+    while len(dets) > 0:
+        # Always keep the box with the highest score
+        keep.append(order[0].item())
+
+        if len(dets) == 1:
+            break  # Only one box left, stop
+
+        # Compute IoU of the top box with the rest
+        xx1 = torch.maximum(dets[0, 0], dets[1:, 0])
+        yy1 = torch.maximum(dets[0, 1], dets[1:, 1])
+        xx2 = torch.minimum(dets[0, 2], dets[1:, 2])
+        yy2 = torch.minimum(dets[0, 3], dets[1:, 3])
+
+        w = torch.clamp(xx2 - xx1, min=0)
+        h = torch.clamp(yy2 - yy1, min=0)
+        intersection = w * h
+
+        area1 = (dets[0, 2] - dets[0, 0]) * (dets[0, 3] - dets[0, 1])
+        area2 = (dets[1:, 2] - dets[1:, 0]) * (dets[1:, 3] - dets[1:, 1])
+        union = area1 + area2 - intersection
+
+        iou = intersection / union
+        # iou = intersection / torch.min(area1, area2)
+
+        # Select boxes with IoU less than the threshold
+        keep_idxs = (iou <= thresh).nonzero(as_tuple=True)[0]
+        dets = dets[1:][keep_idxs]
+        order = order[1:][keep_idxs]
+
+    # Create a new Instances object with the kept detections
+    new_instances = instances[torch.tensor(keep, dtype=torch.long)]
     return new_instances
+
 
 def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overlap=0.5):
     """
@@ -142,7 +176,7 @@ def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overl
     # Split the image into overlapping patches
     print(f'performing nms on overlapping patches...')
     
-    for y in tqdm(range(0, img_height, patch_height - overlap_height)):  # Step by (patch_height - overlap_height)
+    for y in range(0, img_height, patch_height - overlap_height):  # Step by (patch_height - overlap_height)
         for x in range(0, img_width, patch_width - overlap_width):  # Step by (patch_width - overlap_width)
             # Calculate patch boundaries
             patch_xmin = x
@@ -254,7 +288,7 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
     official API.
     """
 
-    def __init__(self, dataset_name, scale=0, final_nms_thr=0.5, axis_thr=0, area_thr=0):
+    def __init__(self, dataset_name, post_process):
         """
         Args:
             dataset_name (str): name of the dataset, e.g., "voc_2007_test"
@@ -273,10 +307,9 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
         self._is_2007 = meta.year == 2007
         self._cpu_device = torch.device("cpu")
         self._logger = logging.getLogger(__name__)
-        self.final_nms_thr = final_nms_thr
-        self.axis_thr = axis_thr
-        self.area_thr = area_thr
-        self.scale=scale
+        self.final_nms_thr = post_process.FINAL_NMS_THR
+        self.axis_thr = post_process.AXIS_THR
+        self.area_thr = post_process.AREA_THR
 
     def reset(self):
         self._predictions = defaultdict(list)  # class name -> list of prediction strings
@@ -291,6 +324,7 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
             scores = instances.scores.to(self._cpu_device).tolist()
             classes = instances.pred_classes.to(self._cpu_device).tolist()
             new_predictions = []
+            image = openslide.open_slide(input["file_name"])
             for box, score, cls in zip(boxes, scores, classes):
                 xmin, ymin, xmax, ymax = box
                 # The inverse of data loading logic in `datasets/pascal_voc.py`
@@ -300,12 +334,13 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
                 width = xmax - xmin
                 height = ymax - ymin
                 area = width * height
-                if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr:
+                mean_value = np.array(image.read_region((int(box[0]),int(box[1])),0,(int(box[2]-box[0]+1),int(box[3]-box[1]+1))))[:,:,:-1].mean()
+                if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr and mean_value <= 200:
                     new_predictions.append(
                         f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
                     )
             self._predictions[cls].extend(new_predictions)
-            print(f"{len(scores)-len(new_predictions)} ({((len(scores)-len(new_predictions))/len(scores)):.1f}%) bboxes are filtered through axis_thr={self.axis_thr}, area_thr={self.area_thr}.")
+            # print(f"{len(scores)-len(new_predictions)} ({((len(scores)-len(new_predictions))/len(scores)):.1f}%) bboxes are filtered through axis_thr={self.axis_thr}, area_thr={self.area_thr}.")
             
     
     def save(self, output_dir: str):

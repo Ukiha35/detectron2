@@ -68,7 +68,7 @@ def build_evaluator(cfg, dataset_name, output_folder=None):
         return CityscapesSemSegEvaluator(dataset_name)
     elif evaluator_type == "pascal_voc":
         # return PascalVOCDetectionEvaluator(dataset_name)
-        return PascalVOCDetectionEvaluator(dataset_name, cfg.DATASETS.LEVEL)
+        return PascalVOCDetectionEvaluator(dataset_name, cfg.DATASETS.POST_PROCESS)
     elif evaluator_type == "lvis":
         return LVISEvaluator(dataset_name, output_dir=output_folder)
     if len(evaluator_list) == 0:
@@ -153,12 +153,13 @@ def main(args):
 
 def invoke_main() -> None:
     args = default_argument_parser().parse_args()
-    args.GPU = '2'
+    args.GPU = '3'
     args.resume = True
     # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
-    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_train.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_train.yaml"
     # args.eval_only = True
 
     print("Command Line Args:", args)

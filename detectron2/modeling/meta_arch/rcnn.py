@@ -339,3 +339,57 @@ class ProposalNetwork(nn.Module):
             r = detector_postprocess(results_per_image, height, width)
             processed_results.append({"proposals": r})
         return processed_results
+
+# sizea = 128
+# a=[{}]
+# a[0]['image'] = torch.randint(0, 255, (3,sizea,sizea))
+# a[0]['height'] = sizea
+# a[0]['width'] = sizea
+# sizeb = 1000
+# b=[{}]
+# b[0]['image'] = torch.randint(0, 255, (3,sizeb,sizeb))
+# b[0]['height'] = sizeb
+# b[0]['width'] = sizeb
+
+# print()
+# mean_time = [0,0,0,0]
+# for i in range(50):
+#     t1=time.time()
+#     images = self.preprocess_image(a)
+#     t2=time.time()
+#     features = self.backbone(images.tensor)
+#     t3=time.time()
+#     proposals, _ = self.proposal_generator(images, features, None)
+#     t4=time.time()
+#     results, _ = self.roi_heads(images, features, proposals, None)
+#     t5=time.time()
+#     p_len = proposals[0].proposal_boxes.tensor.shape
+#     mean_time[0]+=t2-t1
+#     mean_time[1]+=t3-t2
+#     mean_time[2]+=t4-t3
+#     mean_time[3]+=t5-t4
+# mean_time =[m/50 for m in mean_time]
+# print(f"({sizea}):preprocess:{mean_time[0]},backbone:{mean_time[1]},rpn:{mean_time[2]},heads:{mean_time[3]}")
+# print(f"proposals:{p_len}")
+
+# mean_time = [0,0,0,0]
+# for i in range(50):
+#     t1=time.time()
+#     images = self.preprocess_image(b)
+#     t2=time.time()
+#     features = self.backbone(images.tensor)
+#     t3=time.time()
+#     proposals, _ = self.proposal_generator(images, features, None)
+#     t4=time.time()
+#     results, _ = self.roi_heads(images, features, proposals, None)
+#     t5=time.time()
+#     p_len = proposals[0].proposal_boxes.tensor.shape
+#     mean_time[0]+=t2-t1
+#     mean_time[1]+=t3-t2
+#     mean_time[2]+=t4-t3
+#     mean_time[3]+=t5-t4
+# mean_time =[m/50 for m in mean_time]
+# print(f"({sizeb}):preprocess:{mean_time[0]},backbone:{mean_time[1]},rpn:{mean_time[2]},heads:{mean_time[3]}")
+# print(f"proposals:{p_len}")
+
+

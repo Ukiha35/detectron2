@@ -10,10 +10,11 @@ from torch import nn
 
 from detectron2.utils.comm import get_world_size, is_main_process
 from detectron2.utils.logger import log_every_n_seconds
-from detectron2.structures import Instances
+from detectron2.structures import Instances,Boxes
 from tqdm import tqdm
 import os,json
 import numpy as np
+
 class DatasetEvaluator:
     """
     Base class for a dataset evaluator.
@@ -171,7 +172,7 @@ def inference_on_dataset(
             total_compute_time += time.perf_counter() - start_compute_time
 
             start_eval_time = time.perf_counter()
-            evaluator.process(inputs, outputs,-1)
+            evaluator.process(inputs, outputs)
             total_eval_time += time.perf_counter() - start_eval_time
 
             iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
@@ -304,6 +305,7 @@ def inference_on_wsi_dataset(
         for inputs in data_loader:
             total_data_time += time.perf_counter() - start_data_time
 
+            total_additional_outputs = []
             total_outputs = []
             for wsi in inputs:
                 print(f"processing {wsi['file_name']}...")
@@ -323,11 +325,45 @@ def inference_on_wsi_dataset(
                     if torch.cuda.is_available():
                         torch.cuda.synchronize()
                     total_compute_time += time.perf_counter() - start_compute_time
+                    
+                    ########################################################################
+                    # patch postprocessing
+                    ########################################################################
+                    
                     for i in range(len(output)):
-                        output[i]['instances'].pred_boxes.tensor += torch.cat((torch.tensor(patch[i]['patch_offset']),torch.tensor(patch[i]['patch_offset']))).cuda()
-                        output[i]['instances'].pred_boxes.tensor *= patch[i]['patch_scale']
-                        output[i]['instances']._image_size = (wsi['width'],wsi['height'])
-                    wsi_outputs.extend(output)
+                        coord_in_patch = patch[i]['coord_in_patch']
+                        coord = patch[i]['coord']
+                        image_size = (wsi['width'],wsi['height'])
+                        device = output[i]["instances"].pred_boxes.tensor.device
+                        # border = patch[i]['border']
+                        total_hit_bbox = []
+                        total_hit_scores = []
+                        total_hit_classes = []
+                        for cp,c in zip(coord_in_patch, coord):
+                            actual_border = [(0 if c[id]==lim else 1) for id, lim in enumerate([0,0,image_size[0],image_size[1]])]
+                            hit_idx = [id for id in range(len(output[i]["instances"])) if 
+                                    (output[i]["instances"].pred_boxes.tensor[id][0]>=cp[0]+actual_border[0]) and 
+                                    (output[i]["instances"].pred_boxes.tensor[id][1]>=cp[1]+actual_border[1]) and 
+                                    (output[i]["instances"].pred_boxes.tensor[id][0]<=cp[0]+cp[2]-actual_border[2]) and 
+                                    (output[i]["instances"].pred_boxes.tensor[id][1]<=cp[1]+cp[3]-actual_border[3])]
+                            # hit_idx = list(range(len(output[i]["instances"])))
+                            scale = [c[2]/cp[2], c[3]/cp[3]]
+                            hit_bbox = output[i]["instances"][hit_idx].pred_boxes.tensor
+                            hit_bbox -= torch.tensor(np.tile(cp[0:2], 2), device=device)
+                            hit_bbox *= torch.tensor(scale*2).to(device)
+                            hit_bbox += torch.tensor(np.tile(c[0:2], 2), device=device)
+
+                            total_hit_bbox.extend(hit_bbox)
+                            total_hit_scores.extend(output[i]["instances"][hit_idx].scores)
+                            total_hit_classes.extend(output[i]["instances"][hit_idx].pred_classes)
+                            
+                    ########################################################################
+                    # patch postprocessing
+                    ########################################################################
+                        if len(total_hit_bbox)>0:
+                            wsi_outputs.append(Instances(image_size, pred_boxes=Boxes(torch.stack(total_hit_bbox)),
+                                scores=torch.stack(total_hit_scores),
+                                pred_classes=torch.stack(total_hit_classes)))                            
 
                     if idx == num_warmup:
                         start_time = time.perf_counter()
@@ -359,7 +395,7 @@ def inference_on_wsi_dataset(
                 
                     '''
 
-                total_outputs.append({"instances":Instances.cat([o['instances'] for o in wsi_outputs])})
+                total_outputs.append({"instances":Instances.cat(wsi_outputs)})
             
             
             

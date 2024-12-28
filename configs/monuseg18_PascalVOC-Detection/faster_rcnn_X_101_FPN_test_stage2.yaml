@@ -20,20 +20,29 @@ MODEL:
     ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
   RPN:
     IN_FEATURES: ["p2", "p3", "p4", "p5"]
+
 INPUT:
-  PRIOR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_lowres_small/conf_thr_0.0_SCALE_1_step_1.0_patch_size_500_500/" #######################
+  MIN_SIZE_TEST: 0
 
 DATASETS:
-  TEST: ('voc_2007_wsi',)
-  FINAL_NMS_THR: 0.1
-  SCALE: 1.0
-  DBSCAN_THR: 30
-  MIN_SAMPLE: 2
-  EXPAND: 10
-  AXIS_THR: 10.0
-  AREA_THR: 100.0
+  TEST: ('voc_2007_test',)
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 5.0
+    AREA_THR: 50.0
+  CLUSTER_PARAMETER:
+    EXPAND: 10
+    NMM_THR: [0.1]
+    # ADJUST_PARAMETER:
+    #   MIN_SIZE: (350,350)
+    #   MAX_SIZE: (600,600)
+    #   TARGET_SIZE: (350,350)
 
+    
+    SCALE: 1.0
+    BORDER: 10
+    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_lowres_small/conf_thr_1e-10_SCALE_2.0_step_1.0_axis_10.0_area_100.0_patch_size_1000_1000_model_final" #######################
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/home/ps/ltc/detectron2/experiments_output/monuseg18_fullres_stage2/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_stage2/" #######################

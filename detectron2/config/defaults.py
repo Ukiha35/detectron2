@@ -75,7 +75,6 @@ _C.INPUT.CROP.TYPE = "relative_range"
 # pixels if CROP.TYPE is "absolute"
 _C.INPUT.CROP.SIZE = [0.9, 0.9]
 # pixels if CROP.TYPE is "str"
-_C.INPUT.PRIOR = None
 
 
 
@@ -109,25 +108,41 @@ _C.DATASETS.TEST = ()
 _C.DATASETS.PROPOSAL_FILES_TEST = ()
 # Number of top scoring precomputed proposals to keep for test
 _C.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST = 1000
-# Final nms threshold for wsi test
-_C.DATASETS.FINAL_NMS_THR = -0.1
-# Patch size for wsi test
-_C.DATASETS.PATCH_SIZE = (1000,1000)
-# overlap step for wsi test
-_C.DATASETS.STEP = 0.5
-# downsample level for wsi test
-_C.DATASETS.SCALE = 1.0
-# bbox whose axis length is smaller than axis_thr is filtered
-_C.DATASETS.AXIS_THR = 0.0
-# bbox whose area size is smaller than area_thr is filtered
-_C.DATASETS.AREA_THR = 0.0
-# DBSCAN阈值，用于过滤距离较远的目标
-_C.DATASETS.DBSCAN_THR = 30
-# DBSCAN中的最小样本数，用于确定一个簇的最小大小
-_C.DATASETS.MIN_SAMPLE = 2
-# 用于扩展边界框的大小
-_C.DATASETS.EXPAND = 10
 
+
+
+# -----------------------------------------------------------------------------
+# DATASETS.POST_PROCESS
+# -----------------------------------------------------------------------------
+_C.DATASETS.POST_PROCESS = CN()
+# Final nms threshold for wsi test
+_C.DATASETS.POST_PROCESS.FINAL_NMS_THR = -0.1
+# bbox whose axis length is smaller than axis_thr is filtered
+_C.DATASETS.POST_PROCESS.AXIS_THR = 0.0
+# bbox whose area size is smaller than area_thr is filtered
+_C.DATASETS.POST_PROCESS.AREA_THR = 0.0
+
+# -----------------------------------------------------------------------------
+# DATASETS.CLUSTER_PARAMETER
+# -----------------------------------------------------------------------------
+_C.DATASETS.CLUSTER_PARAMETER = CN()
+# 用于扩展边界框的大小
+_C.DATASETS.CLUSTER_PARAMETER.EXPAND = 0
+# overlap step for wsi test
+_C.DATASETS.CLUSTER_PARAMETER.STEP = 0.5
+# Patch size for wsi test
+_C.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE = (1000,1000)
+# downsample level for wsi test
+_C.DATASETS.CLUSTER_PARAMETER.SCALE = 1.0
+_C.DATASETS.CLUSTER_PARAMETER.NMM_THR = [0.5]
+_C.DATASETS.CLUSTER_PARAMETER.BORDER = 0
+_C.DATASETS.CLUSTER_PARAMETER.PRIOR = None
+_C.DATASETS.CLUSTER_PARAMETER.CANVAS_SIZE = None
+
+_C.DATASETS.CLUSTER_PARAMETER.ADJUST_PARAMETER = CN()
+_C.DATASETS.CLUSTER_PARAMETER.ADJUST_PARAMETER.MIN_SIZE = (100,100)
+_C.DATASETS.CLUSTER_PARAMETER.ADJUST_PARAMETER.MAX_SIZE = (700,700)
+_C.DATASETS.CLUSTER_PARAMETER.ADJUST_PARAMETER.TARGET_SIZE = (250,250)
 # -----------------------------------------------------------------------------
 # DataLoader
 # -----------------------------------------------------------------------------
