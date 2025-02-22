@@ -15,6 +15,44 @@ from tqdm import tqdm
 import os,json
 import numpy as np
 
+def filter_bboxes_in_patch(bboxes, patch, ratio=0.5):
+    """
+    筛选出在 patch 内部至少有一定比例端点在 patch 中的 bbox 的索引。
+
+    Args:
+        bboxes (numpy.ndarray): 二维数组，shape 为 (N, 4)，每一行是 [xmin, ymin, xmax, ymax]。
+        patch (tuple): patch 的范围 (xmin, ymin, xmax, ymax)。
+        ratio (float): 扩展比例，用于动态调整 patch 的边界。
+
+    Returns:
+        numpy.ndarray: 符合条件的 bbox 索引。
+    """
+    
+    # 解包 patch 范围
+    patch_xmin, patch_ymin, patch_xmax, patch_ymax = patch
+
+    # 计算每个 bbox 的宽度和高度
+    bbox_widths = bboxes[:, 2] - bboxes[:, 0]
+    bbox_heights = bboxes[:, 3] - bboxes[:, 1]
+
+    # 根据比例扩展 patch 的边界
+    expanded_patch_xmin = patch_xmin - bbox_widths * ratio
+    expanded_patch_ymin = patch_ymin - bbox_heights * ratio
+    expanded_patch_xmax = patch_xmax + bbox_widths * ratio
+    expanded_patch_ymax = patch_ymax + bbox_heights * ratio
+
+    # 检查 bbox 的四个端点是否都在扩展后的 patch 中
+    inside_xmin = bboxes[:, 0] >= expanded_patch_xmin
+    inside_ymin = bboxes[:, 1] >= expanded_patch_ymin
+    inside_xmax = bboxes[:, 2] <= expanded_patch_xmax
+    inside_ymax = bboxes[:, 3] <= expanded_patch_ymax
+
+    # 计算最终的筛选条件
+    selected_mask = inside_xmin & inside_ymin & inside_xmax & inside_ymax
+
+    # 返回符合条件的索引
+    return torch.where(selected_mask)[0]
+
 class DatasetEvaluator:
     """
     Base class for a dataset evaluator.
@@ -340,13 +378,16 @@ def inference_on_wsi_dataset(
                         total_hit_scores = []
                         total_hit_classes = []
                         for cp,c in zip(coord_in_patch, coord):
-                            actual_border = [(0 if c[id]==lim else 1) for id, lim in enumerate([0,0,image_size[0],image_size[1]])]
-                            hit_idx = [id for id in range(len(output[i]["instances"])) if 
-                                    (output[i]["instances"].pred_boxes.tensor[id][0]>=cp[0]+actual_border[0]) and 
-                                    (output[i]["instances"].pred_boxes.tensor[id][1]>=cp[1]+actual_border[1]) and 
-                                    (output[i]["instances"].pred_boxes.tensor[id][0]<=cp[0]+cp[2]-actual_border[2]) and 
-                                    (output[i]["instances"].pred_boxes.tensor[id][1]<=cp[1]+cp[3]-actual_border[3])]
-                            # hit_idx = list(range(len(output[i]["instances"])))
+                            interval = np.array([0,0,0,0])
+                            # interval = np.array([(0 if c[id]==lim else 1) for id, lim in enumerate([0,0,image_size[0],image_size[1]])])
+                            
+                            patch_border = cp.copy()
+                            patch_border[2:] += patch_border[:2]
+                            patch_border[2:] -= interval[2:]
+                            patch_border[:2] += interval[:2]
+                            
+                            hit_idx = filter_bboxes_in_patch(output[i]["instances"].pred_boxes.tensor,patch_border,0.1)
+
                             scale = [c[2]/cp[2], c[3]/cp[3]]
                             hit_bbox = output[i]["instances"][hit_idx].pred_boxes.tensor
                             hit_bbox -= torch.tensor(np.tile(cp[0:2], 2), device=device)
@@ -394,8 +435,8 @@ def inference_on_wsi_dataset(
                         wsi_outputs.extend(output)
                 
                     '''
-
-                total_outputs.append({"instances":Instances.cat(wsi_outputs)})
+                if len(wsi_outputs) > 0:
+                    total_outputs.append({"instances":Instances.cat(wsi_outputs)})
             
             
             

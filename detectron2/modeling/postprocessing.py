@@ -53,7 +53,7 @@ def detector_postprocess(
     assert output_boxes is not None, "Predictions must contain boxes!"
 
     output_boxes.scale(scale_x, scale_y)
-    output_boxes.clip(results.image_size)
+    # output_boxes.clip(results.image_size) ##################################################################################
 
     results = results[output_boxes.nonempty()]
 

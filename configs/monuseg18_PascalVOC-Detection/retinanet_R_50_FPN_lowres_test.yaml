@@ -1,0 +1,42 @@
+_BASE_: "../Base-RetinaNet.yaml"
+MODEL:
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_retinanet_lowres/model_final.pth"
+  PIXEL_STD: [47.49, 41.63, 51.28]
+  MASK_ON: False
+  RESNETS:
+    DEPTH: 50
+    OUT_FEATURES: ["res2", "res3", "res4", "res5"] 
+  RETINANET:
+    IN_FEATURES: ["p2", "p3", "p4", "p5"]
+    NUM_CLASSES: 1
+    SCORE_THRESH_TEST: 0.05
+    NMS_THRESH_TEST: 0.5
+    TOPK_CANDIDATES_TEST: 1500
+  FPN:
+    IN_FEATURES: ["res2", "res3", "res4"]
+  ANCHOR_GENERATOR:
+    SIZES: !!python/object/apply:eval ["[[x, x * 2**(1.0/3), x * 2**(2.0/3) ] for x in [2, 4, 6, 8]]"]
+    ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
+
+INPUT:
+  MIN_SIZE_TEST: 250
+  MAX_SIZE_TEST: 250
+
+DATASETS:
+  TEST: ('voc_2007_test',)
+  POST_PROCESS:
+    FINAL_NMS_THR: 0.1
+    AXIS_THR: 5.0
+    AREA_THR: 50.0
+  CLUSTER_PARAMETER:
+    PATCH_SIZE: (1000,1000)
+    STEP: 1.0
+    SCALE: 4.0
+  
+TEST:
+  DETECTIONS_PER_IMAGE: 1500
+
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_retinanet_lowres/" #######################
+
+
+

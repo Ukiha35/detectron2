@@ -23,7 +23,7 @@ MODEL:
 
 INPUT:
   MIN_SIZE_TEST: 0
-
+  MAX_SIZE_TEST: 1000
 DATASETS:
   TEST: ('voc_2007_test',)
   POST_PROCESS:
@@ -41,7 +41,7 @@ DATASETS:
     
     SCALE: 1.0
     BORDER: 10
-    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_lowres_small/conf_thr_1e-10_SCALE_2.0_step_1.0_axis_10.0_area_100.0_patch_size_1000_1000_model_final" #######################
+    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_lowres_small/conf_thr_1e-10_SCALE_2.0_step_1.0_axis_5.0_area_50.0_patch_size_1000_1000_model_final" #######################
 TEST:
   DETECTIONS_PER_IMAGE: 500
 

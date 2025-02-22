@@ -174,7 +174,7 @@ def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overl
     overlap_height, overlap_width = [int(i*overlap) for i in patch_size]
     
     # Split the image into overlapping patches
-    print(f'performing nms on overlapping patches...')
+    # print(f'performing nms on overlapping patches...')
     
     for y in range(0, img_height, patch_height - overlap_height):  # Step by (patch_height - overlap_height)
         for x in range(0, img_width, patch_width - overlap_width):  # Step by (patch_width - overlap_width)
@@ -323,8 +323,10 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
             boxes = instances.pred_boxes.tensor.to(self._cpu_device).numpy()
             scores = instances.scores.to(self._cpu_device).tolist()
             classes = instances.pred_classes.to(self._cpu_device).tolist()
-            new_predictions = []
-            image = openslide.open_slide(input["file_name"])
+            boxes[:,[0,2]] = np.clip(boxes[:,[0,2]], 0, input['width'])
+            boxes[:,[1,3]] = np.clip(boxes[:,[1,3]], 0, input['height'])
+                            
+            # image = openslide.open_slide(input["file_name"])
             for box, score, cls in zip(boxes, scores, classes):
                 xmin, ymin, xmax, ymax = box
                 # The inverse of data loading logic in `datasets/pascal_voc.py`
@@ -334,13 +336,17 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
                 width = xmax - xmin
                 height = ymax - ymin
                 area = width * height
-                mean_value = np.array(image.read_region((int(box[0]),int(box[1])),0,(int(box[2]-box[0]+1),int(box[3]-box[1]+1))))[:,:,:-1].mean()
-                if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr and mean_value <= 200:
-                    new_predictions.append(
+                
+                if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr:
+                    self._predictions[cls].append(
                         f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
                     )
-            self._predictions[cls].extend(new_predictions)
-            # print(f"{len(scores)-len(new_predictions)} ({((len(scores)-len(new_predictions))/len(scores)):.1f}%) bboxes are filtered through axis_thr={self.axis_thr}, area_thr={self.area_thr}.")
+                # mean_value = np.array(image.read_region((int(box[0]),int(box[1])),0,(int(box[2]-box[0]+1),int(box[3]-box[1]+1))))[:,:,:-1].mean()
+                # if width >= self.axis_thr and height >= self.axis_thr and area >= self.area_thr and mean_value <= 200:
+                #     self._predictions[cls].append(
+                #         f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
+                #     )
+                
             
     
     def save(self, output_dir: str):

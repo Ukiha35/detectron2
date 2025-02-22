@@ -10,7 +10,7 @@ MODEL:
     NUM_CLASSES: 1
     SCORE_THRESH_TEST: 0.05
     NMS_THRESH_TEST: 0.5
-    TOPK_CANDIDATES_TEST: 1000
+    TOPK_CANDIDATES_TEST: 1500
   FPN:
     IN_FEATURES: ["res3", "res4", "res5"]
   ANCHOR_GENERATOR:
@@ -19,6 +19,8 @@ MODEL:
 INPUT:
   MIN_SIZE_TRAIN: (250,240,230,220,210,200)
   MAX_SIZE_TRAIN: 250
+  MAX_SIZE_TEST: 250
+  MIN_SIZE_TEST: 250
   CROP:
     ENABLED: False
 
@@ -35,13 +37,13 @@ SOLVER:
   MAX_ITER: 6000  # 翻倍，保证总训练量一致
   WARMUP_ITERS: 200  # 可适当增加，避免过大的初始波动
   IMS_PER_BATCH: 16  # 单 GPU 训练，batch size 减半
-  BASE_LR: 0.0015  # 学习率减半，适配 batch size
+  BASE_LR: 0.005  # 学习率减半，适配 batch size
   CHECKPOINT_PERIOD: 1000
 
 TEST:
   EXPECTED_RESULTS: [['bbox', 'AP', 0, 100]]
   EVAL_PERIOD: 1000
-  DETECTIONS_PER_IMAGE: 150
+  DETECTIONS_PER_IMAGE: 1500
 
 OUTPUT_DIR: "/home/ps/ltc/detectron2/experiments/monuseg18_retinanet_fullres/" #######################
 

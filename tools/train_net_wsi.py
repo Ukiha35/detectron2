@@ -279,11 +279,16 @@ class WSITrainer(DefaultTrainer):
         if len(results) == 1:
             results = list(results.values())[0]
         
-        if 'wsi' in cfg.DATASETS.TEST:
+        if 'wsi' in cfg.DATASETS.TEST[0]:
             os.system(f"python /home/ps/ltc/monuseg18/data/vis_wsi.py --pred_label_path {save_dir}")
         else:
             os.system(f"python /home/ps/ltc/monuseg18/data/vis.py --pred_label_path {save_dir}")
 
+        if 'assign' in cfg.DATASETS.CLUSTER_PARAMETER.PRIOR:
+            if 'wsi' in cfg.DATASETS.TEST[0]:
+                os.system(f"python /home/ps/ltc/monuseg18/data/vis_canvas_wsi.py --json_path {cfg.DATASETS.CLUSTER_PARAMETER.PRIOR} --pred_label_path {save_dir}")
+            else:
+                os.system(f"python /home/ps/ltc/monuseg18/data/vis_canvas.py --json_path {cfg.DATASETS.CLUSTER_PARAMETER.PRIOR} --pred_label_path {save_dir}")
         return results
     
 
@@ -301,7 +306,19 @@ def setup(args):
 
 def main(args):        
     cfg = setup(args)
-    args.save_dir = os.path.join(cfg.SAVE_DIR, f"conf_thr_{cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST}_SCALE_{cfg.DATASETS.CLUSTER_PARAMETER.SCALE}_step_{cfg.DATASETS.CLUSTER_PARAMETER.STEP}_axis_{cfg.DATASETS.POST_PROCESS.AXIS_THR}_area_{cfg.DATASETS.POST_PROCESS.AREA_THR}_patch_size_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[0]}_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[1]}_{cfg.MODEL.WEIGHTS.split('/')[-1].split('.pth')[0]}")
+
+    if 'RetinaNet' in cfg.MODEL.META_ARCHITECTURE:
+        args.save_dir = os.path.join(cfg.SAVE_DIR, f"conf_thr_{cfg.MODEL.RETINANET.SCORE_THRESH_TEST}_SCALE_{cfg.DATASETS.CLUSTER_PARAMETER.SCALE}_step_{cfg.DATASETS.CLUSTER_PARAMETER.STEP}_axis_{cfg.DATASETS.POST_PROCESS.AXIS_THR}_area_{cfg.DATASETS.POST_PROCESS.AREA_THR}_patch_size_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[0]}_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[1]}_{cfg.MODEL.WEIGHTS.split('/')[-1].split('.pth')[0]}")
+    else:
+        args.save_dir = os.path.join(cfg.SAVE_DIR, f"conf_thr_{cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST}_SCALE_{cfg.DATASETS.CLUSTER_PARAMETER.SCALE}_step_{cfg.DATASETS.CLUSTER_PARAMETER.STEP}_axis_{cfg.DATASETS.POST_PROCESS.AXIS_THR}_area_{cfg.DATASETS.POST_PROCESS.AREA_THR}_patch_size_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[0]}_{cfg.DATASETS.CLUSTER_PARAMETER.PATCH_SIZE[1]}_{cfg.MODEL.WEIGHTS.split('/')[-1].split('.pth')[0]}")
+
+    if cfg.DATASETS.CLUSTER_PARAMETER.PRIOR is not None and "assign" in cfg.DATASETS.CLUSTER_PARAMETER.PRIOR:
+        additional_dir = cfg.DATASETS.CLUSTER_PARAMETER.PRIOR.split('/')[-2:]
+        additional_dir[-1] = additional_dir[-1].split(".")[0]
+        args.save_dir = os.path.join(args.save_dir, *additional_dir)
+
+    
+
 
     # register_dataset()
     if args.eval_only:
@@ -333,7 +350,7 @@ def main(args):
 # 而由于patch大小不固定，导致resize时间不固定，故必须排除。
 def invoke_main() -> None:
     args = default_argument_parser().parse_args()
-    args.GPU = '0'
+    args.GPU = '1'
     
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test.yaml"
@@ -341,7 +358,11 @@ def invoke_main() -> None:
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_stage2.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_wsi.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test_wsi.yaml"
-    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_test.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_test.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_test.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign_wsi.yaml"
+
     args.eval_only = True
 
 

@@ -155,11 +155,18 @@ def invoke_main() -> None:
     args = default_argument_parser().parse_args()
     args.GPU = '3'
     args.resume = True
-    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
-    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_train.yaml"
     args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_train.yaml"
+    
+    
+    
+    # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_R_50_FPN.yaml"
+    
+    
+    
     # args.eval_only = True
 
     print("Command Line Args:", args)
@@ -173,7 +180,7 @@ def invoke_main() -> None:
         args=(args,),
     )
 
-def register_all_pascal_voc(root):
+def register_all_pascal_voc():
     # dir = "/media/ps/passport1/ltc/DHB/VOC2007_pos_based_scale_20/"
     # dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_250/"
     dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_1000/"
@@ -188,10 +195,25 @@ def register_all_pascal_voc(root):
     ]
     for name, dirname, split in SPLITS:
         year = 2007 if "2007" in name else 2012
-        register_pascal_voc(name, os.path.join(root, dirname), split, year)
+        register_pascal_voc(name, dirname, split, year)
         MetadataCatalog.get(name).evaluator_type = "pascal_voc"
+
+# def register_all_pascal_voc():
+#     dir = "/media/ps/passport1/ltc/VOCdevkit/VOC2012/"
+
+    
+#     SPLITS = [
+#         ("voc_2012_trainval", dir, "trainval"),
+#         ("voc_2012_train", dir, "train"),
+#         ("voc_2012_val", dir, "val"),
+#     ]
+#     for name, dirname, split in SPLITS:
+#         year = 2007 if "2007" in name else 2012
+#         register_pascal_voc(name, dirname, split, year)
+#         MetadataCatalog.get(name).evaluator_type = "pascal_voc"
+
 
 
 if __name__ == "__main__":
-    register_all_pascal_voc(root="/media/ps/passport1/ltc/monuseg18/")
+    register_all_pascal_voc()
     invoke_main()  # pragma: no cover

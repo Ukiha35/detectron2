@@ -54,13 +54,10 @@ INPUT:
   FORMAT: BGR
   MASK_FORMAT: polygon
   MAX_SIZE_TEST: 1333
-  MAX_SIZE_TRAIN: 250
+  MAX_SIZE_TRAIN: 500
   MIN_SIZE_TEST: 800
   MIN_SIZE_TRAIN:
-  - 250
-  - 240
-  - 230
-  - 220
+  - 500
   MIN_SIZE_TRAIN_SAMPLING: choice
   RANDOM_FLIP: horizontal
 MODEL:
@@ -293,13 +290,13 @@ MODEL:
     NORM: GN
     NUM_CLASSES: 54
   WEIGHTS: detectron2://ImageNetPretrained/FAIR/X-101-32x8d.pkl
-OUTPUT_DIR: /home/ps/ltc/detectron2/experiments/monuseg18_fullres/
+OUTPUT_DIR: /home/ps/ltc/detectron2/experiments/monuseg18_lowres_small/
 SAVE_DIR: ./results
 SEED: -1
 SOLVER:
   AMP:
     ENABLED: false
-  BASE_LR: 0.003
+  BASE_LR: 0.0005
   BASE_LR_END: 0.0
   BIAS_LR_FACTOR: 1.0
   CHECKPOINT_PERIOD: 500
@@ -309,7 +306,7 @@ SOLVER:
     ENABLED: false
     NORM_TYPE: 2.0
   GAMMA: 0.96
-  IMS_PER_BATCH: 16
+  IMS_PER_BATCH: 4
   LR_SCHEDULER_NAME: WarmupMultiStepLR
   MAX_ITER: 3000
   MOMENTUM: 0.9
@@ -342,7 +339,7 @@ TEST:
     - 1000
     - 1100
     - 1200
-  DETECTIONS_PER_IMAGE: 150
+  DETECTIONS_PER_IMAGE: 2000
   EVAL_PERIOD: 500
   EXPECTED_RESULTS:
   - - bbox

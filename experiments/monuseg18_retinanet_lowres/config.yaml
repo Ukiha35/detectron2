@@ -30,8 +30,8 @@ DATASETS:
     SCALE: 1.0
     STEP: 0.5
   POST_PROCESS:
-    AREA_THR: 100.0
-    AXIS_THR: 10.0
+    AREA_THR: 50.0
+    AXIS_THR: 5.0
     FINAL_NMS_THR: 0.1
   PRECOMPUTED_PROPOSAL_TOPK_TEST: 1000
   PRECOMPUTED_PROPOSAL_TOPK_TRAIN: 2000
@@ -53,14 +53,11 @@ INPUT:
     TYPE: relative_range
   FORMAT: BGR
   MASK_FORMAT: polygon
-  MAX_SIZE_TEST: 1333
+  MAX_SIZE_TEST: 250
   MAX_SIZE_TRAIN: 250
-  MIN_SIZE_TEST: 800
+  MIN_SIZE_TEST: 250
   MIN_SIZE_TRAIN:
   - 250
-  - 245
-  - 240
-  - 235
   MIN_SIZE_TRAIN_SAMPLING: choice
   RANDOM_FLIP: horizontal
 MODEL:
@@ -88,9 +85,6 @@ MODEL:
     - - 8
       - 10.079368399158986
       - 12.699208415745595
-    - - 12
-      - 15.119052598738477
-      - 19.048812623618392
   BACKBONE:
     FREEZE_AT: 2
     NAME: build_retinanet_resnet_fpn_backbone
@@ -98,9 +92,9 @@ MODEL:
   FPN:
     FUSE_TYPE: sum
     IN_FEATURES:
+    - res2
     - res3
     - res4
-    - res5
     NORM: ''
     OUT_CHANNELS: 256
   KEYPOINT_ON: false
@@ -137,6 +131,7 @@ MODEL:
     NORM: FrozenBN
     NUM_GROUPS: 1
     OUT_FEATURES:
+    - res2
     - res3
     - res4
     - res5
@@ -155,11 +150,10 @@ MODEL:
     FOCAL_LOSS_ALPHA: 0.25
     FOCAL_LOSS_GAMMA: 2.0
     IN_FEATURES:
+    - p2
     - p3
     - p4
     - p5
-    - p6
-    - p7
     IOU_LABELS:
     - 0
     - -1
@@ -302,7 +296,7 @@ SEED: -1
 SOLVER:
   AMP:
     ENABLED: false
-  BASE_LR: 0.0005
+  BASE_LR: 0.003
   BASE_LR_END: 0.0
   BIAS_LR_FACTOR: 1.0
   CHECKPOINT_PERIOD: 1000
@@ -312,18 +306,18 @@ SOLVER:
     ENABLED: false
     NORM_TYPE: 2.0
   GAMMA: 0.96
-  IMS_PER_BATCH: 16
+  IMS_PER_BATCH: 32
   LR_SCHEDULER_NAME: WarmupMultiStepLR
-  MAX_ITER: 6000
+  MAX_ITER: 12000
   MOMENTUM: 0.9
   NESTEROV: false
   NUM_DECAYS: 3
   REFERENCE_WORLD_SIZE: 0
   RESCALE_INTERVAL: false
   STEPS:
-  - 3000
   - 4000
-  - 5000
+  - 7000
+  - 10000
   WARMUP_FACTOR: 0.001
   WARMUP_ITERS: 200
   WARMUP_METHOD: linear

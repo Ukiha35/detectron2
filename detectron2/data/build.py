@@ -35,8 +35,10 @@ import os
 import json
 import openslide
 import h5py
+import random
 from torchvision.ops import nms
-
+from detectron2.data.transforms import ResizeShortestEdge, AugInput
+import numpy as np
 """
 This file contains the default logic to build a dataloader for training or testing.
 """
@@ -58,6 +60,67 @@ __all__ = [
     "draw_bboxes",
     
 ]
+
+
+
+def resize_patch_to_target_size(patch, target_size):
+    """
+    根据目标输出大小动态调整图像大小，按输入大小的倍数进行处理。
+
+    Args:
+        patch (np.ndarray): 输入图像，格式为 (H, W, C)。
+        target_size (tuple): 目标输出大小 (target_height, target_width)。
+
+    Returns:
+        np.ndarray: 缩放后的图像，大小为目标输出大小。
+    """
+    # 获取输入图像的原始大小
+    original_height, original_width = patch.shape[:2]
+
+    # 获取目标大小
+    target_width, target_height = target_size
+
+    # 计算目标与输入大小的缩放比例（取短边为基准）
+    height_ratio = target_height / original_height
+    width_ratio = target_width / original_width
+
+    # 使用最小缩放倍数，以确保不会超出目标范围
+    scale_factor = min(height_ratio, width_ratio)
+
+    # 根据缩放倍数计算 ResizeShortestEdge 的参数
+    new_min_size = round(min(original_width, original_height) * scale_factor)
+    new_max_size = round(max(original_width, original_height) * scale_factor)
+
+    # 确保 new_min_size 和 new_max_size 不小于 1
+    new_min_size = max(1, new_min_size)
+    new_max_size = max(1, new_max_size)
+
+    # 创建 ResizeShortestEdge 工具
+    resize_tool = ResizeShortestEdge([new_min_size, new_min_size], new_max_size)
+
+    # 使用 AugInput 进行图像变换
+    aug_input = AugInput(patch)
+    resize_tool(aug_input)
+
+    # 获取缩放后的图像
+    resized_patch = aug_input.image
+
+    # 如果目标大小与缩放后的大小完全一致，则直接返回
+    if resized_patch.shape[:2] == (target_height, target_width):
+        return resized_patch
+
+    # 如果缩放结果仍有细微差异，用 Padding 或 Cropping 处理到目标大小
+    # 这里采用 Padding 方式，将图像填充到目标大小
+    top_padding = (target_height - resized_patch.shape[0]) // 2
+    bottom_padding = target_height - resized_patch.shape[0] - top_padding
+    left_padding = (target_width - resized_patch.shape[1]) // 2
+    right_padding = target_width - resized_patch.shape[1] - left_padding
+
+    padded_patch = np.pad(resized_patch,
+                          ((top_padding, bottom_padding), (left_padding, right_padding), (0, 0)),
+                          mode='constant', constant_values=255)
+
+    return padded_patch
 
 
 def fast_nmm(bbox_list, iou_threshold):
@@ -175,10 +238,13 @@ def fast_nms(bbox_list, thresh):
     
     return new_bbox_list
 
-def expand_bboxes(coordinates,expand=5, size_limit=[0,0,1000,1000]):
+def expand_bboxes(coordinates,expand=5, size_limit=None):
     coordinates = np.array([[bbox[0] - expand,  bbox[1] - expand, 
                         (bbox[2]+2*expand), (bbox[3]+2*expand), bbox[4]] for bbox in coordinates])
-    return clip_bboxes(coordinates,size_limit=size_limit)
+    if size_limit is None:
+        return coordinates
+    else:
+        return clip_bboxes(coordinates,size_limit=size_limit)
 
 def clip_bboxes(coordinates, size_limit=[0,0,1000,1000]):
     coordinates[:, 2:4] = coordinates[:, 2:4] + coordinates[:, 0:2]
@@ -533,7 +599,7 @@ def build_batch_data_loader(
     aspect_ratio_grouping=False,
     num_workers=0,
     collate_fn=None,
-    drop_last: bool = True,
+    drop_last: bool = False,
     single_gpu_batch_size=None,
     prefetch_factor=2,
     persistent_workers=False,
@@ -591,7 +657,8 @@ def build_batch_data_loader(
         generator.manual_seed(seed)
 
     if aspect_ratio_grouping:
-        assert drop_last, "Aspect ratio grouping will drop incomplete batches."
+        # assert drop_last, "Aspect ratio grouping will drop incomplete batches."
+        assert not drop_last, "Aspect ratio grouping will not drop any incomplete batches."
         data_loader = torchdata.DataLoader(
             dataset,
             num_workers=num_workers,
@@ -1035,7 +1102,8 @@ class WSIPatchDataset(torchdata.Dataset):
         self.adjust_parameter = cluster_parameter.ADJUST_PARAMETER
         self.nmm_thr = cluster_parameter.NMM_THR
         self.border = cluster_parameter.BORDER
-        self.canvas_size = cluster_parameter.CANVAS_SIZE
+        self.config_canvas_size = cluster_parameter.CANVAS_SIZE
+        self.canvas_size = None
         self.bg_value = bg_value
         # self.preprocess()
         if self.prior is None:
@@ -1044,7 +1112,7 @@ class WSIPatchDataset(torchdata.Dataset):
             self.divide_by_prior()
 
     def __len__(self):
-        return len(self.coordinates)
+        return self.canvas_id.max()+1
 
     def preprocess(self):
         self.item['image'] = self.item['image'][0].numpy()
@@ -1087,8 +1155,11 @@ class WSIPatchDataset(torchdata.Dataset):
         self.coordinates_in_patch[:,2:] /= self.scale
         
         self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+        if self.config_canvas_size is not None:
+            self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
         
     def divide_by_prior(self):
+        # stage2
         try:
             with open(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.json'),'r') as f:
                 prior = json.load(f)
@@ -1106,18 +1177,67 @@ class WSIPatchDataset(torchdata.Dataset):
             self.coordinates = expand_bboxes(self.coordinates,self.border,[0,0,self.item['width'],self.item['width']])
             
             self.coordinates = self.coordinates[:,:-1]
+            
+            if self.config_canvas_size is not None:
+                self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
+            
+            self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+            
+            self.coordinates_in_patch = self.coordinates.copy()
+            self.coordinates_in_patch[:,:2] = 0
+            self.coordinates_in_patch[:,2:] /= self.scale            
         except:
+            pass
+        
+        #wsi
+        try:
             with h5py.File(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.h5'), 'r') as h5_file:
                 self.coordinates = h5_file['coords'][...]
             self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 2), self.patch_size)))
-
-        draw_bboxes(self.item["file_name"],np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h']] for bbox in prior]),self.coordinates,"/media/ps/passport1/ltc/monuseg18/test_prior")
+            
+            if self.config_canvas_size is not None:
+                self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
+            
+            self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+            
+            self.coordinates_in_patch = self.coordinates.copy()
+            self.coordinates_in_patch[:,:2] = 0
+            self.coordinates_in_patch[:,2:] /= self.scale            
+        except:
+            pass
         
-        self.coordinates_in_patch = self.coordinates.copy()
-        self.coordinates_in_patch[:,:2] = 0
-        self.coordinates_in_patch[:,2:] /= self.scale
+        #assign
+        try:
+            with open(self.prior,'r') as f:
+                prior = json.load(f)
+            prior = [p for p in prior if os.path.basename(self.item['file_name']).split('.')[0] in p['file_name']]
+            
+            coordinates = []
+            coordinates_in_patch = []
+            canvas_id = []
+            canvas_size = []
 
-        self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
+            for id, p in enumerate(prior):
+                canvas_size.append([p['bin_width'],p['bin_height']])
+                for coord, coord_in_patch in zip(p['origin_cluster_box'],p['moved_cluster_box']):
+                    coordinates.append([coord[0],coord[1],coord[2]-coord[0],coord[3]-coord[1]])
+                    coordinates_in_patch.append([coord_in_patch[0],coord_in_patch[1],max(coord_in_patch[2]-coord_in_patch[0],1),max(coord_in_patch[3]-coord_in_patch[1],1)])
+                    canvas_id.append(id)
+
+            self.coordinates = np.array(coordinates)
+            self.coordinates_in_patch = np.array(coordinates_in_patch)
+            self.canvas_id = np.array(canvas_id)
+            self.canvas_size = np.array(canvas_size)
+                
+        except:
+            pass
+        
+
+
+        # draw_bboxes(self.item["file_name"], "/media/ps/passport1/ltc/monuseg18/assign_prior", self.coordinates, self.canvas_id)
+        
+
+
 
         
         print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
@@ -1126,29 +1246,31 @@ class WSIPatchDataset(torchdata.Dataset):
         print(f"patch number: {len(self.coordinates)}")
         print()
         
-    def __getitem__(self, idx):
+    def __getitem__(self, idx):   
         ids = np.where(self.canvas_id==idx)[0]
         
         coord = self.coordinates[ids].astype(int)
         coord_in_patch = self.coordinates_in_patch[ids].astype(int)
-        
-        if self.canvas_size == None:
-            canvas_size = ((coord_in_patch[:,0]+coord_in_patch[:,2]).max(), (coord_in_patch[:,1]+coord_in_patch[:,3]).max())
-        else:
+
+        if self.canvas_size is not None:
             canvas_size = self.canvas_size
+        else:
+            canvas_size = np.array([[(coord_in_patch[:,0]+coord_in_patch[:,2]).max(), (coord_in_patch[:,1]+coord_in_patch[:,3]).max()]]*self.coordinates.shape[0])
             
-        canvas = np.ones((canvas_size[1], canvas_size[0], 3)) * self.bg_value
+        canvas = np.ones((canvas_size[idx, 1], canvas_size[idx, 0], 3)) * self.bg_value
         
         if self.item["file_name"].endswith(".jpg"):
             image = cv2.imread(self.item["file_name"])
             for cp, c in zip(coord_in_patch, coord):
-                patch = image[c[1]:(c[1]+c[3]),c[0]:(c[0]+c[2])]
-                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = cv2.resize(patch, cp[2:])
+                patch = image[c[1]:(c[1]+c[3]),c[0]:(c[0]+c[2])] #opencv默认读进来是BGR格式
+                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = resize_patch_to_target_size(patch, cp[2:])
+                
+                
         else:
             image = openslide.open_slide(self.item["file_name"])
             for cp, c in zip(coord_in_patch, coord):
-                patch = np.array(image.read_region((coord[0],coord[1]),0,(coord[2],coord[3])))[:,:,:-1]
-                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = cv2.resize(patch, cp[2:])
+                patch = np.array(image.read_region((c[0],c[1]),0,(c[2],c[3])))[:,:,-2::-1] # openslide默认读进来是RGBA格式
+                canvas[cp[1]:(cp[1]+cp[3]),cp[0]:(cp[0]+cp[2])] = resize_patch_to_target_size(patch, cp[2:])
             
         canvas = torch.as_tensor(canvas.astype("float32").transpose(2, 0, 1))
         
@@ -1156,8 +1278,8 @@ class WSIPatchDataset(torchdata.Dataset):
         ret = self.item.copy()
         
         ret['image'] = canvas
-        ret["width"] = canvas_size[0]
-        ret["height"] = canvas_size[1]
+        ret["width"] = canvas_size[idx, 0]
+        ret["height"] = canvas_size[idx, 1]
         ret['coord'] = coord
         ret['coord_in_patch'] = coord_in_patch
         ret['image_id'] = self.item['image_id']+'_'+str(idx)
@@ -1188,34 +1310,40 @@ def worker_init_reset_seed(worker_id):
 
 
 
-def draw_bboxes(image_path, green_bboxes, red_bboxes, output_path):
+def draw_bboxes(image_path, output_path, bboxes, canvas_ids):
     """
-    Draw bounding boxes on an image and save the result.
-    
+    Draw bounding boxes on an image with unique colors based on canvas IDs and save the result.
+
     Args:
         image_path (str): Path to the input image (jpg format).
-        green_bboxes (list): List of green bounding boxes. Each box is [x_min, y_min, x_max, y_max].
-        red_bboxes (list): List of red bounding boxes. Each box is [x_min, y_min, x_max, y_max].
         output_path (str): Path to save the output image.
+        bboxes (numpy.ndarray): [x, 4] array of bounding boxes. Each box is [x, y, w, h].
+        canvas_ids (list): List of canvas IDs corresponding to each bounding box (length x).
     """
     # Load the image
     image = cv2.imread(image_path)
-    
     if image is None:
         raise ValueError(f"Image not found at {image_path}")
     
-    # Draw green bounding boxes
-    for bbox in green_bboxes.astype(int):
-        x_min, y_min, w, h = bbox
-        cv2.rectangle(image, (x_min, y_min), (x_min+w, y_min+h), (0, 255, 0), 2)  # Green color, thickness=2
-
-    # Draw red bounding boxes
-    for bbox in red_bboxes.astype(int):
-        x_min, y_min, w, h = bbox
-        cv2.rectangle(image, (x_min, y_min), (x_min+w, y_min+h), (0, 0, 255), 2)  # Red color, thickness=2
-
+    if len(bboxes) != len(canvas_ids):
+        raise ValueError("The length of bboxes and canvas_ids must be the same.")
+    
+    # Generate unique colors for each canvas_id
+    unique_ids = list(set(canvas_ids))
+    id_to_color = {
+        cid: (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) 
+        for cid in unique_ids
+    }
+    
+    # Draw bounding boxes
+    for bbox, cid in zip(bboxes, canvas_ids):
+        x, y, w, h = map(int, bbox)
+        x_min, y_min, x_max, y_max = x, y, x + w, y + h  # Convert [x, y, w, h] to [xmin, ymin, xmax, ymax]
+        color = id_to_color[cid]  # Use the color associated with the canvas_id
+        cv2.rectangle(image, (x_min, y_min), (x_max, y_max), color, 2)  # Thickness=2
+    
     # Save the output image
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-    cv2.imwrite(os.path.join(output_path,os.path.basename(image_path)), image)
-    print(f"Saved output image with bounding boxes to {output_path}")
+    os.makedirs(output_path, exist_ok=True)
+    output_file = os.path.join(output_path, os.path.basename(image_path))
+    cv2.imwrite(output_file, image)
+    print(f"Saved output image with bounding boxes to {output_file}")

@@ -26,17 +26,16 @@ INPUT:
   MAX_SIZE_TEST: 1000
 
 DATASETS:
-  TEST: ('voc_2007_test',)
+  TEST: ('voc_2007_wsi',)
   POST_PROCESS:
-    FINAL_NMS_THR: 0.1
+    FINAL_NMS_THR: 0.25
     AXIS_THR: 5.0
     AREA_THR: 50.0
   CLUSTER_PARAMETER:
-    PATCH_SIZE: (250,250)
-    STEP: 0.5
+    PRIOR: "/home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin250_len12_fix_lambda_0.1_border_-5/testwsi_assign_50.json/" #######################
     SCALE: 1.0
-    CANVAS_SIZE: (250,250)
+  
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres/" #######################

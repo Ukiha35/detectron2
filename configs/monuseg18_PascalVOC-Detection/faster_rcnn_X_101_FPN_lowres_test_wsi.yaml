@@ -37,7 +37,8 @@ MODEL:
     # IN_FEATURES: ["p2", "p3", "p4"]
 
 INPUT:
-  MIN_SIZE_TEST: 0
+  MIN_SIZE_TEST: 250
+  MAX_SIZE_TEST: 250
 
 DATASETS:
   TEST: ('voc_2007_wsi',)
@@ -46,7 +47,7 @@ DATASETS:
     AXIS_THR: 5.0
     AREA_THR: 50.0
   CLUSTER_PARAMETER:
-    PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
+    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
     SCALE: 2.0
 
 TEST:

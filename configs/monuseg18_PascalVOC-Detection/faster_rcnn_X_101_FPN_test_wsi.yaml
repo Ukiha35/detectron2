@@ -23,7 +23,7 @@ MODEL:
 
 INPUT:
   MIN_SIZE_TEST: 0
-  
+  MAX_SIZE_TEST: 1000
 DATASETS:
   TEST: ('voc_2007_wsi',)
   POST_PROCESS:
@@ -34,7 +34,7 @@ DATASETS:
     PATCH_SIZE: (250,250)
     STEP: 0.5
     SCALE: 1.0
-    PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 250/patches/" #######################
+    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 250/patches/" #######################
 TEST:
   DETECTIONS_PER_IMAGE: 150
 
