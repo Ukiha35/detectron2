@@ -284,11 +284,11 @@ class WSITrainer(DefaultTrainer):
         else:
             os.system(f"python /home/ps/ltc/monuseg18/data/vis.py --pred_label_path {save_dir}")
 
-        if 'assign' in cfg.DATASETS.CLUSTER_PARAMETER.PRIOR:
+        if cfg.DATASETS.CLUSTER_PARAMETER.PRIOR is not None and 'assign' in cfg.DATASETS.CLUSTER_PARAMETER.PRIOR:
             if 'wsi' in cfg.DATASETS.TEST[0]:
                 os.system(f"python /home/ps/ltc/monuseg18/data/vis_canvas_wsi.py --json_path {cfg.DATASETS.CLUSTER_PARAMETER.PRIOR} --pred_label_path {save_dir}")
             else:
-                os.system(f"python /home/ps/ltc/monuseg18/data/vis_canvas.py --json_path {cfg.DATASETS.CLUSTER_PARAMETER.PRIOR} --pred_label_path {save_dir}")
+                os.system(f"python /home/ps/ltc/monuseg18/data/vis_canvas.py --json_path {cfg.DATASETS.CLUSTER_PARAMETER.PRIOR} --pred_label_path {save_dir} --pack_mode {cfg.DATASETS.CLUSTER_PARAMETER.PACK_MODE}")
         return results
     
 
@@ -352,16 +352,20 @@ def invoke_main() -> None:
     args = default_argument_parser().parse_args()
     args.GPU = '1'
     
-    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_stage2.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_stage2_wsi.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_stage2_wsi_region.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_wsi.yaml"
-    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_test_wsi.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_lowres_new_wsi.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_test.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_test.yaml"
-    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign_wsi.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_lowres_new.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_test_assign_wsi_region.yaml"
+
 
     args.eval_only = True
 

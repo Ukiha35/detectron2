@@ -1,38 +1,54 @@
-_BASE_: "../Base-RCNN-FPN.yaml"
+DATASETS:
+  CLUSTER_PARAMETER:
+    PACK_MODE: resize
+    # PRIOR: /media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_150_lowres/conf_thr_0.05_SCALE_1.0_step_1.0_axis_5.0_area_50.0_patch_size_500_500_model_final/cluster_roi_0.1_child_nmm_0.1_0.1_0.1_cluster_nmm_0.05_0.05_0.05_expand_20_border_0/manual_assign/manual_assign_select_rate_67.json
+    PRIOR: /home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin800_len4_fix_lambda_0.001_border_0/final_testset_assign_37.json
+    PRIOR_MODE: assign
+  POST_PROCESS:
+    AREA_THR: 50.0
+    AXIS_THR: 5.0
+    FINAL_NMS_MODE: min
+    FINAL_NMS_THR: 0.45
+  TEST: ('voc_2007_test',)
+INPUT:
+  MAX_SIZE_TEST: 1000
+  MIN_SIZE_TEST: 0
 MODEL:
-  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres/model_final.pth"
-  PIXEL_STD: [47.49, 41.63, 51.28]
-  MASK_ON: False
+  ANCHOR_GENERATOR:
+    ASPECT_RATIOS:
+    - - 0.5
+      - 1.0
+      - 2.0
+    SIZES:
+    - - 16
+    - - 24
+    - - 32
+    - - 48
+  MASK_ON: false
+  PIXEL_STD:
+  - 47.49
+  - 41.63
+  - 51.28
   RESNETS:
     DEPTH: 101
-    STRIDE_IN_1X1: False  # this is a C2 model
     NUM_GROUPS: 32
+    STRIDE_IN_1X1: false
     WIDTH_PER_GROUP: 8
+  ROI_BOX_HEAD:
+    NUM_CONV: 0
+    NUM_FC: 2
   ROI_HEADS:
+    NMS_THRESH_TEST: 0.5
     NUM_CLASSES: 1
     SCORE_THRESH_TEST: 0.05
-    NMS_THRESH_TEST: 0.5
-  ROI_BOX_HEAD:
-    NUM_FC: 2
-    NUM_CONV: 0
-  ANCHOR_GENERATOR:
-    SIZES: [[16], [24], [32], [48]]  # One size for each in feature map
-    ASPECT_RATIOS: [[0.5, 1.0, 2.0]]
   RPN:
-    IN_FEATURES: ["p2", "p3", "p4", "p5"]
-
-INPUT:
-  MIN_SIZE_TEST: 0
-  MAX_SIZE_TEST: 1000
-DATASETS:
-  TEST: ('voc_2007_test',)
-  POST_PROCESS:
-    FINAL_NMS_THR: 0.1
-    AXIS_THR: 5.0
-    AREA_THR: 50.0
-  CLUSTER_PARAMETER:
-    PRIOR: "/home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin250_len12_fix_lambda_0.1_border_-5/testset_assign_50.json" #######################
+    IN_FEATURES:
+    - p2
+    - p3
+    - p4
+    - p5
+  WEIGHTS: /home/ps/ltc/detectron2/experiments/monuseg18_fullres_150/model_final.pth
+SAVE_DIR: /media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_assign/
 TEST:
   DETECTIONS_PER_IMAGE: 500
-
-SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_assign/" #######################
+_BASE_: ../Base-RCNN-FPN.yaml

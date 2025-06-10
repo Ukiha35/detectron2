@@ -64,13 +64,13 @@ INPUT:
   FORMAT: BGR
   MASK_FORMAT: polygon
   MAX_SIZE_TEST: 150
-  MAX_SIZE_TRAIN: 250
+  MAX_SIZE_TRAIN: 150
   MIN_SIZE_TEST: 150
   MIN_SIZE_TRAIN:
-  - 250
-  - 200
   - 150
-  - 100
+  - 140
+  - 130
+  - 120
   MIN_SIZE_TRAIN_SAMPLING: choice
   RANDOM_FLIP: horizontal
 MODEL:
@@ -303,7 +303,7 @@ MODEL:
     NORM: GN
     NUM_CLASSES: 54
   WEIGHTS: detectron2://ImageNetPretrained/FAIR/X-101-32x8d.pkl
-OUTPUT_DIR: /home/ps/ltc/detectron2/experiments/monuseg18_fullres/
+OUTPUT_DIR: /home/ps/ltc/detectron2/experiments/monuseg18_fullres_150/
 SAVE_DIR: ./results
 SEED: -1
 SOLVER:

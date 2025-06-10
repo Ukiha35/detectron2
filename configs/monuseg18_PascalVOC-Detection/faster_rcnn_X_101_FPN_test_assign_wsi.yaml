@@ -1,6 +1,6 @@
 _BASE_: "../Base-RCNN-FPN.yaml"
 MODEL:
-  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres/model_final.pth"
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres_150/model_final.pth"
   PIXEL_STD: [47.49, 41.63, 51.28]
   MASK_ON: False
   RESNETS:
@@ -28,14 +28,16 @@ INPUT:
 DATASETS:
   TEST: ('voc_2007_wsi',)
   POST_PROCESS:
-    FINAL_NMS_THR: 0.25
-    AXIS_THR: 5.0
     AREA_THR: 50.0
+    AXIS_THR: 5.0
+    FINAL_NMS_MODE: min
+    FINAL_NMS_THR: 0.45
   CLUSTER_PARAMETER:
-    PRIOR: "/home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin250_len12_fix_lambda_0.1_border_-5/testwsi_assign_50.json/" #######################
-    SCALE: 1.0
+    PRIOR: "/home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin800_len4_fix_lambda_0.001_border_0/testwsi_assign_37.json" #######################
+    PRIOR_MODE: 'assign'
+    PACK_MODE: 'resize'
   
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres_assign/" #######################

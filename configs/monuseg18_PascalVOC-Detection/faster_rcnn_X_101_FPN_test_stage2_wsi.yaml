@@ -1,6 +1,6 @@
 _BASE_: "../Base-RCNN-FPN.yaml"
 MODEL:
-  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres/model_final.pth"
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres_150/model_final.pth"
   PIXEL_STD: [47.49, 41.63, 51.28]
   MASK_ON: False
   RESNETS:
@@ -27,17 +27,26 @@ INPUT:
 DATASETS:
   TEST: ('voc_2007_wsi',)
   POST_PROCESS:
-    FINAL_NMS_THR: 0.1
+    FINAL_NMS_THR: 0.45
     AXIS_THR: 5.0
     AREA_THR: 50.0
+    FINAL_NMS_MODE: "min"
   CLUSTER_PARAMETER:
-    DBSCAN_THR: 40
-    MIN_SAMPLE: 2
-    EXPAND: 10
-  SCALE: 1.0
+    EXPAND: 20
+    # BORDER: 0
+    NMM_THR: [0.1,0.1,0.1]
+    MAX_CHILD_SIZE: [200,200]
+    # CANVAS_SIZE: (200,200)
+    # PRIOR_LEVEL: (100,100)
+    PATCH_SIZE: (200,200)
+    REGION_SIZE: (1000,1000)
+    ROI_THRESHOLD: 0.1
+    
+    SCALE: 1.0
+    PRIOR_MODE: 'bbox'
+    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres/conf_thr_0.05_SCALE_1.0_step_1.0_axis_5.0_area_50.0_patch_size_500_500_model_final" #######################
+    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
 TEST:
-  EXPECTED_RESULTS: [['bbox', 'AP', 0, 100]]
-  EVAL_PERIOD: 5000
-  DETECTIONS_PER_IMAGE: 150
+  DETECTIONS_PER_IMAGE: 500
 
 SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres_stage2/" #######################

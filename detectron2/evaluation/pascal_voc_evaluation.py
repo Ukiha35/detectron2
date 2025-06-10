@@ -92,7 +92,7 @@ def filter_bboxes_by_roi(splitlines, rois, imagenames, threshold=0.5):
 
 
 
-def fast_nms(instances, thresh):
+def fast_nms(instances, thresh, mode):
     """
     Apply Non-Maximum Suppression (NMS) manually using PyTorch operations.
     
@@ -138,8 +138,10 @@ def fast_nms(instances, thresh):
         area2 = (dets[1:, 2] - dets[1:, 0]) * (dets[1:, 3] - dets[1:, 1])
         union = area1 + area2 - intersection
 
-        iou = intersection / union
-        # iou = intersection / torch.min(area1, area2)
+        if mode=='union':
+            iou = intersection / union
+        elif mode=='min':
+            iou = intersection / torch.min(area1, area2)
 
         # Select boxes with IoU less than the threshold
         keep_idxs = (iou <= thresh).nonzero(as_tuple=True)[0]
@@ -151,7 +153,7 @@ def fast_nms(instances, thresh):
     return new_instances
 
 
-def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overlap=0.5):
+def nms_on_patches(instances, image_size, thresh, mode='union', patch_size=[2500, 2500], overlap=0.5):
     """
     Apply NMS on overlapping patches of an image.
     
@@ -195,7 +197,7 @@ def nms_on_patches(instances, image_size, thresh, patch_size=[2500, 2500], overl
                 patch_instances = instances[patch_indices]
                 instances = instances[~patch_indices]
                 # Apply NMS to the current patch
-                patch_instances = fast_nms(patch_instances, thresh)
+                patch_instances = fast_nms(patch_instances, thresh, mode)
                 
                 # Store the result
                 instances = Instances.cat([patch_instances,instances])
@@ -310,6 +312,7 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
         self.final_nms_thr = post_process.FINAL_NMS_THR
         self.axis_thr = post_process.AXIS_THR
         self.area_thr = post_process.AREA_THR
+        self.final_nms_mode = post_process.FINAL_NMS_MODE
 
     def reset(self):
         self._predictions = defaultdict(list)  # class name -> list of prediction strings
@@ -317,7 +320,7 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
     def process(self, inputs, outputs):        
         for input, output in zip(inputs, outputs):
             image_id = input["image_id"]
-            instances = nms_on_patches(output["instances"],output['instances'].image_size, thresh=self.final_nms_thr)
+            instances = nms_on_patches(output["instances"],output['instances'].image_size, thresh=self.final_nms_thr, mode=self.final_nms_mode)
             # instances = fast_nms(output["instances"], final_nms_thr)
             # instances = py_cpu_nms(output["instances"].to(self._cpu_device),final_nms_thr)
             boxes = instances.pred_boxes.tensor.to(self._cpu_device).numpy()
@@ -436,6 +439,11 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
         Returns:
             dict: has a key "segm", whose value is a dict of "AP", "AP50", and "AP75".
         """
+        if "wsi" in self._dataset_name:
+            ret = OrderedDict()
+            ret["bbox"] = {"AP": 0, "AP50": 0, "AP75": 0, "REC75": 0, "PREC75":0, "REC50": 0, "PREC50":0, "REC30": 0, "PREC30":0}
+            self._ap = ret
+            return ret
         all_predictions = comm.gather(self._predictions, dst=0)
         if not comm.is_main_process():
             return

@@ -1,6 +1,6 @@
 _BASE_: "../Base-RCNN-FPN.yaml"
 MODEL:
-  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres/model_final.pth"
+  WEIGHTS: "/home/ps/ltc/detectron2/experiments/monuseg18_fullres_150/model_final.pth"
   PIXEL_STD: [47.49, 41.63, 51.28]
   MASK_ON: False
   RESNETS:
@@ -27,14 +27,16 @@ INPUT:
 DATASETS:
   TEST: ('voc_2007_wsi',)
   POST_PROCESS:
-    FINAL_NMS_THR: 0.1
+    FINAL_NMS_THR: 0.45
     AXIS_THR: 5.0
     AREA_THR: 50.0
+    FINAL_NMS_MODE: 'min'
   CLUSTER_PARAMETER:
-    PATCH_SIZE: (250,250)
-    STEP: 0.5
+    PATCH_SIZE: (150,150)
+    REGION_SIZE: (1000,1000)
+    STEP: 0.25
     SCALE: 1.0
-    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 250/patches/" #######################
+    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
 TEST:
   DETECTIONS_PER_IMAGE: 150
 

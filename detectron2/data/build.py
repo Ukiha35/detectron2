@@ -17,6 +17,7 @@ from detectron2.utils.comm import get_world_size
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.file_io import PathManager
 from detectron2.utils.logger import _log_api_usage, log_first_n
+from detectron2.utils.img_utils import filter_bboxes_in_patch
 
 from .catalog import DatasetCatalog, MetadataCatalog
 from .common import AspectRatioGroupedDataset, DatasetFromList, MapDataset, ToIterableDataset
@@ -39,6 +40,8 @@ import random
 from torchvision.ops import nms
 from detectron2.data.transforms import ResizeShortestEdge, AugInput
 import numpy as np
+from scipy import ndimage as nd
+from PIL import Image
 """
 This file contains the default logic to build a dataloader for training or testing.
 """
@@ -62,6 +65,140 @@ __all__ = [
 ]
 
 
+def compute_gaussian(tile_size: Union[Tuple[int, ...], List[int]], sigma_scale: float = 1. / 8,
+                     value_scaling_factor: float = 1 ):
+    tmp = np.zeros(tile_size)
+    center_coords = [i // 2 for i in tile_size]
+    sigmas = [i * sigma_scale for i in tile_size]
+    tmp[tuple(center_coords)] = 1
+    gaussian_importance_map = nd.gaussian_filter(tmp, sigmas, 0, mode='constant', cval=0)
+
+    gaussian_importance_map = gaussian_importance_map / (gaussian_importance_map).max() * value_scaling_factor
+
+    # gaussian_importance_map cannot be 0, otherwise we may end up with nans!
+    gaussian_importance_map[gaussian_importance_map == 0] = (gaussian_importance_map[gaussian_importance_map != 0]).min()
+
+    return gaussian_importance_map
+
+
+
+
+def max_pooling(input_array, pool_size=(2, 2), stride=(2,2)):
+    # 获取输入的形状
+    input_height, input_width = input_array.shape
+    pool_height, pool_width = pool_size
+    output_height = (input_height - pool_height) // stride[0] + 1
+    output_width = (input_width - pool_width) // stride[1] + 1
+    
+    # 创建输出数组
+    output_array = np.zeros((output_height, output_width))
+    
+    # 执行 max pooling 操作
+    for i in range(output_height):
+        for j in range(output_width):
+            # 获取当前池化窗口
+            window = input_array[i * stride[0] : i * stride[0] + pool_height, j * stride[1] : j * stride[1] + pool_width]
+            # 选择窗口中的最大值
+            output_array[i, j] = np.max(window)
+    
+    return output_array
+
+def batch_nmm_by_size(bbox_list, iou_threshold, batch_size=1, max_size=400*400):
+    """
+    Apply Non-Maximum Merging (NMM) for bounding boxes.
+
+    Args:
+        bbox_list (list): A list of bounding boxes with scores. Each element is [xmin, ymin, xmax, ymax, score].
+        iou_threshold (float): IoU threshold for merging boxes.
+
+    Returns:
+        torch.Tensor: The merged bounding boxes with their scores (shape: M, 5).
+        List[dict]: Detailed information of merged clusters, including each retained box
+                    and its associated child boxes.
+    """
+    # Convert input list to a PyTorch tensor
+    bbox_list = torch.tensor(bbox_list, dtype=torch.float32)
+    bbox_list[:, 2] += bbox_list[:, 0]  # Convert width to xmax
+    bbox_list[:, 3] += bbox_list[:, 1]  # Convert height to ymax
+    
+    if len(bbox_list) == 0:
+        return torch.empty((0, 5)), []
+
+    # Sort boxes by scores in descending order
+    _, idxs = ((bbox_list[:, 2] - bbox_list[:, 0]) * (bbox_list[:, 3] - bbox_list[:, 1])).sort(descending=False)
+    bbox_list = bbox_list[idxs]
+    x1 = bbox_list[:, 0]
+    y1 = bbox_list[:, 1]
+    x2 = bbox_list[:, 2]
+    y2 = bbox_list[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+
+    # Initialize output structures
+    merged_boxes = []
+    clusters = []
+    
+    while len(bbox_list) > 0:
+        # Take the box with the highest score as the "retained box"
+        retained_box = bbox_list[0]
+
+        # Compute IoU with the rest of the boxes
+        xx1 = torch.maximum(retained_box[0], x1)
+        yy1 = torch.maximum(retained_box[1], y1)
+        xx2 = torch.minimum(retained_box[2], x2)
+        yy2 = torch.minimum(retained_box[3], y2)
+
+        w = torch.maximum(torch.tensor(0.0), xx2 - xx1)
+        h = torch.maximum(torch.tensor(0.0), yy2 - yy1)
+        intersection = w * h
+        
+        # iou = intersection / (areas + areas[0] - intersection)
+        iou = intersection / torch.minimum(areas, areas[0])
+        
+        # Find boxes to merge based on IoU threshold
+        all_merge_idxs = (iou > iou_threshold).nonzero(as_tuple=True)[0]
+        merge_idxs = torch.tensor([0])
+        for idx in range(0,len(all_merge_idxs)-1,batch_size):
+            tmp_merge_idxs = torch.hstack((merge_idxs, all_merge_idxs[(idx+1):(idx+1+batch_size)])).to(torch.int)
+            # Compute the union box for the retained box and merged boxes
+            merged_x1 = torch.min(x1[tmp_merge_idxs])
+            merged_y1 = torch.min(y1[tmp_merge_idxs])
+            merged_x2 = torch.max(x2[tmp_merge_idxs])
+            merged_y2 = torch.max(y2[tmp_merge_idxs])
+            if ((merged_x2-merged_x1) <= max_size[0]) and ((merged_y2-merged_y1) <= max_size[1]):
+                merge_idxs = tmp_merge_idxs
+            else:
+                continue
+            
+        # Update the merged box
+        merged_x1 = torch.min(x1[merge_idxs])
+        merged_y1 = torch.min(y1[merge_idxs])
+        merged_x2 = torch.max(x2[merge_idxs])
+        merged_y2 = torch.max(y2[merge_idxs])
+        merged_box = torch.tensor([merged_x1, merged_y1, merged_x2-merged_x1, merged_y2-merged_y1, retained_box[4]])
+            
+        merged_boxes.append(merged_box)
+
+        # Store cluster information
+        tmp_bbox_list = bbox_list[merge_idxs]
+        tmp_bbox_list[:,2:4] = tmp_bbox_list[:,2:4] - tmp_bbox_list[:,0:2]
+
+        cluster_info = {
+            "cluster": [merged_x1.item(), merged_y1.item(), merged_x2.item()-merged_x1.item(), merged_y2.item()-merged_y1.item(), retained_box[4].item()],
+            "children": tmp_bbox_list.tolist()
+        }
+        clusters.append(cluster_info)
+        
+        # Remove merged boxes from the list
+        bbox_list = bbox_list[[i for i in list(range(len(bbox_list))) if i not in merge_idxs]]
+        x1 = bbox_list[:, 0]
+        y1 = bbox_list[:, 1]
+        x2 = bbox_list[:, 2]
+        y2 = bbox_list[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+
+    # Convert merged boxes to a tensor
+    merged_boxes = (torch.stack(merged_boxes) if len(merged_boxes) > 0 else torch.empty((0, 5))).numpy()
+    return merged_boxes, clusters
 
 def resize_patch_to_target_size(patch, target_size):
     """
@@ -122,6 +259,16 @@ def resize_patch_to_target_size(patch, target_size):
 
     return padded_patch
 
+def pil_resize(img, target_size):
+    if len(img.shape) > 2 and img.shape[2] == 1:
+        pil_image = Image.fromarray(img[:, :, 0], mode="L")
+    else:
+        pil_image = Image.fromarray(img)
+    pil_image = pil_image.resize(list(target_size), 2)
+    ret = np.asarray(pil_image)
+    if len(img.shape) > 2 and img.shape[2] == 1:
+        ret = np.expand_dims(ret, -1)
+    return ret
 
 def fast_nmm(bbox_list, iou_threshold):
     """
@@ -946,7 +1093,8 @@ def _wsi_test_loader_from_config(cfg, dataset_name, mapper=None):
             else None
         ),
         "cluster_parameter": cfg.DATASETS.CLUSTER_PARAMETER,
-        "bg_value": cfg.MODEL.PIXEL_MEAN,
+        # "bg_value": cfg.MODEL.PIXEL_MEAN,
+        "bg_value": [0.0,0.0,0.0],
     }
 
 
@@ -1093,8 +1241,14 @@ class WSIPatchDataset(torchdata.Dataset):
         self.item = item.copy()
         self.item.pop("annotations",None)
         self.patch_size = cluster_parameter.PATCH_SIZE
+        self.region_size = cluster_parameter.REGION_SIZE
         self.step = cluster_parameter.STEP
         self.prior = cluster_parameter.PRIOR
+        self.prior_mode = cluster_parameter.PRIOR_MODE
+        self.prior_level = cluster_parameter.PRIOR_LEVEL
+        self.roi_threshold = cluster_parameter.ROI_THRESHOLD
+        self.wsi_prior = cluster_parameter.WSI_PRIOR
+        self.pack_mode = cluster_parameter.PACK_MODE
         self.scale = cluster_parameter.SCALE
         # self.dbscan_thr = cluster_parameter.DBSCAN_THR
         # self.min_sample = cluster_parameter.MIN_SAMPLE
@@ -1102,17 +1256,40 @@ class WSIPatchDataset(torchdata.Dataset):
         self.adjust_parameter = cluster_parameter.ADJUST_PARAMETER
         self.nmm_thr = cluster_parameter.NMM_THR
         self.border = cluster_parameter.BORDER
+        self.max_child_size = cluster_parameter.MAX_CHILD_SIZE
         self.config_canvas_size = cluster_parameter.CANVAS_SIZE
         self.canvas_size = None
         self.bg_value = bg_value
+        self.region_mode = cluster_parameter.REGION_MODE
+        self.region = cluster_parameter.REGION
+        self.region_level = cluster_parameter.REGION_LEVEL
+        self.region_file = cluster_parameter.REGION_FILE
+        self.selection_ratio = cluster_parameter.SELECTION_RATIO
+        self.cluster_nmm_thr = cluster_parameter.NMM_CLUSTER_THR
+        self.max_cluster_size = cluster_parameter.MAX_CLUSTER_SIZE
         # self.preprocess()
+        if self.region_mode == 'region':
+            self.divide_region_by_prior()
         if self.prior is None:
-            self.sliding_window_operation()
+            if self.wsi_prior is None:
+                self.coordinates, self.coordinates_in_patch, self.canvas_id, self.padding = self.sliding_window_operation([0, 0, self.item['width'], self.item['height']])
+            else:
+                self.divide_by_prior()
         else:
-            self.divide_by_prior()
+            if self.prior_mode == 'bbox':
+                self.divide_by_prior()
+            elif self.prior_mode == 'assign':
+                self.divide_by_canvas()
+                
+        if self.canvas_size is None:
+            if self.config_canvas_size is not None:
+                self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
 
     def __len__(self):
-        return self.canvas_id.max()+1
+        if len(self.canvas_id) > 0:
+            return self.canvas_id.max()+1
+        else:
+            return 0
 
     def preprocess(self):
         self.item['image'] = self.item['image'][0].numpy()
@@ -1131,133 +1308,291 @@ class WSIPatchDataset(torchdata.Dataset):
         preprocessed = cv2.equalizeHist(self.item['image'].astype(np.uint8))
         self.item['image'] = torch.tensor(preprocessed[None]).repeat(3,1,1)
     
-    def sliding_window_operation(self):
+    def sliding_window_operation(self, region):
         patch_size = self.patch_size
         step = self.step
-        shape = [self.item['width'], self.item['height']]
 
-        x_coords = np.arange(0, shape[0], int(patch_size[0]*step))
-        x_coords = x_coords[(x_coords+patch_size[0])<shape[0]]
-        x_coords = np.append(x_coords,shape[0] - patch_size[0]).astype(float)
+        x_coords = np.arange(0, region[2], int(patch_size[0]*step))
+        x_coords = x_coords[(x_coords+patch_size[0])<region[2]]
+        x_coords = np.append(x_coords,region[2] - patch_size[0]).astype(float)
         
-        y_coords = np.arange(0, shape[1], int(patch_size[1]*step))
-        y_coords = y_coords[(y_coords+patch_size[1])<shape[1]]
-        y_coords = np.append(y_coords,shape[1] - patch_size[1]).astype(float)
+        y_coords = np.arange(0, region[3], int(patch_size[1]*step))
+        y_coords = y_coords[(y_coords+patch_size[1])<region[3]]
+        y_coords = np.append(y_coords,region[3] - patch_size[1]).astype(float)
         
         x, y = np.meshgrid(x_coords, y_coords, indexing='ij')
 
-        self.coordinates = np.stack((x.reshape(-1), y.reshape(-1))).transpose((1,0))
-        self.coordinates = np.hstack((self.coordinates, 
-                                      np.full((self.coordinates.shape[0], 2), self.patch_size)))
+        coordinates = np.stack((x.reshape(-1), y.reshape(-1))).transpose((1,0))
+        coordinates = np.hstack((coordinates, 
+                                      np.full((coordinates.shape[0], 2), patch_size)))
+        coordinates[:,:2] += region[:2]
         
-        self.coordinates_in_patch = self.coordinates.copy()
-        self.coordinates_in_patch[:,:2] = 0
-        self.coordinates_in_patch[:,2:] /= self.scale
+        coordinates_in_patch = coordinates.copy()
+        coordinates_in_patch[:,:2] = 0
+        coordinates_in_patch[:,2:] /= self.scale
         
-        self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
-        if self.config_canvas_size is not None:
-            self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
+        canvas_id = np.arange(0,coordinates.shape[0])
+        padding = np.zeros((coordinates.shape[0], 2))
+        
+        return coordinates, coordinates_in_patch, canvas_id, padding
+        
+    def get_coord_from_heatmap(self,region,all_prior):
+        tmp_region = np.array(region)
+        tmp_region[2:] += tmp_region[:2]
+        prior = all_prior[filter_bboxes_in_patch(all_prior, tmp_region, 0.0)].copy()
+        prior[:,2:4] -= prior[:,:2]
+        
+        first_stage_map = np.zeros(region[2:])
+        counter = np.zeros(region[2:])
+        for bbox in prior:
+            bbox_in_region = (bbox[:-1] - np.array(list(region[:2])+[0,0])).astype(int)
+            gaussion = compute_gaussian(bbox_in_region[2:], sigma_scale=1. / 8, value_scaling_factor=10)
+            first_stage_map[bbox_in_region[0]:(bbox_in_region[0]+bbox_in_region[2]),bbox_in_region[1]:(bbox_in_region[1]+bbox_in_region[3])] += gaussion * bbox[-1]
+            counter[bbox_in_region[0]:(bbox_in_region[0]+bbox_in_region[2]),bbox_in_region[1]:(bbox_in_region[1]+bbox_in_region[3])] += gaussion
+        
+        zero_mask = counter == 0
+        first_stage_map[~zero_mask] = first_stage_map[~zero_mask] / counter[~zero_mask]
+        probs_map = max_pooling(first_stage_map, pool_size=self.prior_level, stride=self.prior_level)
+        POI = probs_map >= self.roi_threshold
+        
+        tmp_coordinates = []
+        x_idxs, y_idxs = np.where(POI)
+        if POI.sum() == 0:
+            return [], []
+        for idx in range(len(y_idxs)):
+            x_mask = x_idxs[idx]
+            y_mask = y_idxs[idx]
+            x_center = np.clip(int((x_mask + 0.5) * self.prior_level[0] + region[0]), self.patch_size[0] // 2, region[0]+region[2] - self.patch_size[0] // 2)
+            y_center = np.clip(int((y_mask + 0.5) * self.prior_level[1] + region[1]), self.patch_size[1] // 2, region[1]+region[3] - self.patch_size[1] // 2)
+            x, w = x_center - self.patch_size[0] // 2, self.patch_size[0]
+            y, h = y_center - self.patch_size[1] // 2, self.patch_size[1]
+            pos_idx = np.where(first_stage_map[x:(x+w), y:(y+h)] > self.roi_threshold)
+            scr = first_stage_map[x:(x+w), y:(y+h)][pos_idx].mean() if len(pos_idx[0]) > 0 else 0
+            tmp_coordinates.append([x, y, w, h, scr])
+            
+        tmp_coordinates = expand_bboxes(tmp_coordinates,self.expand,region)
+        cluster_dict = []
+        for thr in self.nmm_thr:
+            tmp_coordinates, new_cluster_dict = batch_nmm_by_size(tmp_coordinates, iou_threshold=thr,max_size=[m-self.border*2 for m in self.max_child_size])
+        tmp_coordinates = expand_bboxes(tmp_coordinates,self.border,region)
+    
+        tmp_coordinates = tmp_coordinates[:,:-1]
+        tmp_coordinates_in_patch = tmp_coordinates.copy()
+        tmp_coordinates_in_patch[:,:2] = 0
+        tmp_coordinates_in_patch[:,2:] /= self.scale
+        return tmp_coordinates, tmp_coordinates_in_patch
+            
+    def get_coord(self,region,all_prior):
+        tmp_region = np.array(region)
+        tmp_region[2:] += tmp_region[:2]
+        prior = all_prior[filter_bboxes_in_patch(all_prior, tmp_region, 0.0)].copy()
+        prior[:,2:4] -= prior[:,:2]
+        
+        if len(prior) == 0:
+            return np.zeros([0,4]), np.zeros([0,4]), np.zeros([0,2])
+        
+        tmp_coordinates = expand_bboxes(prior,self.expand,region)
+        for thr in self.nmm_thr:
+            tmp_coordinates, _ = batch_nmm_by_size(tmp_coordinates, iou_threshold=thr,max_size=[m-self.border*2 for m in self.max_child_size])
+        
+        if len(self.cluster_nmm_thr) > 0:
+            tmp_cluster_coordinates = tmp_coordinates.copy()
+            for thr in self.cluster_nmm_thr:
+                tmp_cluster_coordinates, _ = batch_nmm_by_size(tmp_coordinates, iou_threshold=thr,max_size=[m-self.border*2 for m in self.max_cluster_size])
+            tmp_coordinates = np.vstack((tmp_coordinates, tmp_cluster_coordinates))
+            # tmp_coordinates = tmp_cluster_coordinates
+        
+        tmp_padding = []
+        for idx in range(len(tmp_coordinates)):
+            bbox = tmp_coordinates[idx].copy()
+            x_mask = bbox[0]+bbox[2]/2
+            y_mask = bbox[1]+bbox[3]/2
+            
+            w, h = max(bbox[2], self.patch_size[0]), max(bbox[3], self.patch_size[1])
+            # w, h = bbox[2] + 20, bbox[3] + 20
+            
+            x_center = np.clip(int((x_mask + 0.5)), region[0] + w // 2, region[0] + region[2] - w // 2)
+            y_center = np.clip(int((y_mask + 0.5)), region[1] + h // 2, region[1] + region[3] - h // 2)
+            x, y = x_center - w // 2, y_center - h // 2
+            
+            tmp_coordinates[idx] = np.array([x, y, w, h, bbox[-1]])
+            tmp_padding.append([w-bbox[2], h-bbox[3]])
+        tmp_coordinates = tmp_coordinates[:,:-1]
+        tmp_coordinates_in_patch = tmp_coordinates.copy()
+        tmp_coordinates_in_patch[:,:2] = 0
+        tmp_coordinates_in_patch[:,2:] /= self.scale
+        return tmp_coordinates, tmp_coordinates_in_patch, tmp_padding
+    
+    def divide_region_by_prior(self):
+        slide = openslide.open_slide(self.item["file_name"])
+        scale_rate = slide.level_dimensions[0][0] / slide.level_dimensions[self.region_level][0]
+        regions = []
+        for f_id, f in enumerate(self.region_file):
+            if f == self.item["file_name"]:
+                regions.append([int(r * scale_rate) for r in self.region[f_id*4:(f_id+1)*4]])
+        
+        self.coordinates = []
+        self.coordinates_in_patch = []
+        self.canvas_id = []
+        self.padding = []
+        
+        if len(regions) == 0:
+            return
+        
+        if self.prior is None:
+            for region in regions:
+                tmp_coordinates, tmp_coordinates_in_patch, _, padding = self.sliding_window_operation(region)
+                self.coordinates.append(tmp_coordinates)
+                self.coordinates_in_patch.append(tmp_coordinates_in_patch)
+                self.padding.append(padding)
+        else:
+            with open(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.json'),'r') as f:
+                all_prior = json.load(f)
+            all_prior = np.array([[bbox['x'], bbox['y'], bbox['w']+bbox['x'], bbox['h']+bbox['y'], bbox['score']] for bbox in all_prior])
+            for region in regions:
+                # tmp_coordinates, tmp_coordinates_in_patch = self.get_coord_from_heatmap(region, all_prior)
+                tmp_coordinates, tmp_coordinates_in_patch, tmp_padding = self.get_coord(region, all_prior)
+                
+                self.coordinates.append(tmp_coordinates)
+                self.coordinates_in_patch.append(tmp_coordinates_in_patch)
+                self.padding.append(tmp_padding)
+        
+        self.coordinates = np.vstack(self.coordinates)
+        self.coordinates_in_patch = np.vstack(self.coordinates_in_patch)
+        self.padding = np.vstack(self.padding)
+        
+        if self.selection_ratio < 1.0:
+            num_patches = len(self.coordinates)
+            num_selected = int(num_patches * self.selection_ratio)
+            selected_indices = np.random.choice(num_patches, num_selected, replace=False)
+            
+            self.coordinates = self.coordinates[selected_indices]
+            self.coordinates_in_patch = self.coordinates_in_patch[selected_indices]
+            self.padding = self.padding[selected_indices]
+            
+        self.canvas_id = np.arange(0,self.coordinates.shape[0])
+        # draw_bboxes(self.item["file_name"], "/media/ps/passport1/ltc/monuseg18/assign_prior", self.coordinates, self.canvas_id)
+
+        if self.coordinates != []:
+            print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
+            print(f"mean patch size:{int(self.coordinates[:,2].mean()), int(self.coordinates[:,3].mean())}")
+            print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
+            print(f"patch number: {len(self.coordinates)}")
+            print()  
         
     def divide_by_prior(self):
-        # stage2
-        try:
+        if self.wsi_prior is not None:
+            with h5py.File(os.path.join(self.wsi_prior,os.path.basename(self.item['file_name']).split('.')[0]+'.h5'), 'r') as h5_file:
+                regions = h5_file['coords'][...]
+            regions = np.hstack((regions, np.full((regions.shape[0], 2), self.region_size)))
+        else:
+            regions = [[0, 0, self.item['width'], self.item['height']]]
+            
+        self.coordinates = []
+        self.coordinates_in_patch = []
+        self.padding = []
+        
+        if self.prior is None:
+            for region in regions:
+                tmp_coordinates, tmp_coordinates_in_patch, _, padding = self.sliding_window_operation(region)
+                self.coordinates.append(tmp_coordinates)
+                self.coordinates_in_patch.append(tmp_coordinates_in_patch)
+                self.padding.append(padding)
+        else:
             with open(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.json'),'r') as f:
-                prior = json.load(f)
-            self.coordinates = np.array([[bbox['x'], bbox['y'], bbox['w'], bbox['h'], bbox['score']] for bbox in prior])
-            
-            self.coordinates = expand_bboxes(self.coordinates,self.expand,[0,0,self.item['width'],self.item['width']])
-            
-            for thr in self.nmm_thr:
-                self.coordinates, _ = fast_nmm(self.coordinates, iou_threshold=thr)
+                all_prior = json.load(f)
+            all_prior = np.array([[bbox['x'], bbox['y'], bbox['w']+bbox['x'], bbox['h']+bbox['y'], bbox['score']] for bbox in all_prior])
+            for region in regions:
+                # tmp_coordinates, tmp_coordinates_in_patch = self.get_coord_from_heatmap(region, all_prior)
+                tmp_coordinates, tmp_coordinates_in_patch, tmp_padding = self.get_coord(region, all_prior)
                 
-            # self.coordinates = cluster_bboxes_with_dbscan(self.coordinates,self.dbscan_thr,self.min_sample)
+                self.coordinates.append(tmp_coordinates)
+                self.coordinates_in_patch.append(tmp_coordinates_in_patch)
+                self.padding.append(tmp_padding)
+       
+        self.coordinates = np.vstack(self.coordinates)
+        self.coordinates_in_patch = np.vstack(self.coordinates_in_patch)
+        self.padding = np.vstack(self.padding)
+       
+        if self.selection_ratio < 1.0:
+            num_patches = len(self.coordinates)
+            num_selected = int(num_patches * self.selection_ratio)
+            selected_indices = np.random.choice(num_patches, num_selected, replace=False)
             
-            # self.coordinates = adjust_patches(self.coordinates, max_size=self.adjust_parameter.MAX_SIZE, min_size=self.adjust_parameter.MIN_SIZE, target_size=self.adjust_parameter.TARGET_SIZE,size_limit=[self.item['width'],self.item['width']])
-                        
-            self.coordinates = expand_bboxes(self.coordinates,self.border,[0,0,self.item['width'],self.item['width']])
-            
-            self.coordinates = self.coordinates[:,:-1]
-            
-            if self.config_canvas_size is not None:
-                self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
-            
-            self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
-            
-            self.coordinates_in_patch = self.coordinates.copy()
-            self.coordinates_in_patch[:,:2] = 0
-            self.coordinates_in_patch[:,2:] /= self.scale            
-        except:
-            pass
+            self.coordinates = self.coordinates[selected_indices]
+            self.coordinates_in_patch = self.coordinates_in_patch[selected_indices]
+            self.padding = self.padding[selected_indices]
         
-        #wsi
-        try:
-            with h5py.File(os.path.join(self.prior,os.path.basename(self.item['file_name']).split('.')[0]+'.h5'), 'r') as h5_file:
-                self.coordinates = h5_file['coords'][...]
-            self.coordinates = np.hstack((self.coordinates, np.full((self.coordinates.shape[0], 2), self.patch_size)))
-            
-            if self.config_canvas_size is not None:
-                self.canvas_size = np.array([self.config_canvas_size]*self.coordinates.shape[0])
-            
-            self.canvas_id = np.arange(0,self.coordinates.shape[0]).reshape(-1,1)
-            
-            self.coordinates_in_patch = self.coordinates.copy()
-            self.coordinates_in_patch[:,:2] = 0
-            self.coordinates_in_patch[:,2:] /= self.scale            
-        except:
-            pass
-        
-        #assign
-        try:
-            with open(self.prior,'r') as f:
-                prior = json.load(f)
-            prior = [p for p in prior if os.path.basename(self.item['file_name']).split('.')[0] in p['file_name']]
-            
-            coordinates = []
-            coordinates_in_patch = []
-            canvas_id = []
-            canvas_size = []
+        self.canvas_id = np.arange(0,self.coordinates.shape[0])
+        # draw_bboxes(self.item["file_name"], "/media/ps/passport1/ltc/monuseg18/assign_prior", self.coordinates, self.canvas_id)
 
-            for id, p in enumerate(prior):
-                canvas_size.append([p['bin_width'],p['bin_height']])
-                for coord, coord_in_patch in zip(p['origin_cluster_box'],p['moved_cluster_box']):
+        if self.coordinates is not []:
+            print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
+            print(f"mean patch size:{int(self.coordinates[:,2].mean()), int(self.coordinates[:,3].mean())}")
+            print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
+            print(f"patch number: {len(self.coordinates)}")
+            print()  
+        
+    def divide_by_canvas(self):
+        with open(self.prior,'r') as f:
+            prior = json.load(f)
+        prior = [p for p in prior if os.path.basename(self.item['file_name']).split('.')[0] in p['file_name']]
+        
+        coordinates = []
+        coordinates_in_patch = []
+        canvas_id = []
+        canvas_size = []
+
+        for id, p in enumerate(prior):
+            canvas_size.append([p['bin_width'],p['bin_height']])
+            for coord, coord_in_patch in zip(p['origin_cluster_box'],p['moved_cluster_box']):
+                if (np.array(coord[2:])<=1).all():
+                    continue
+                if self.pack_mode == 'resize':
                     coordinates.append([coord[0],coord[1],coord[2]-coord[0],coord[3]-coord[1]])
                     coordinates_in_patch.append([coord_in_patch[0],coord_in_patch[1],max(coord_in_patch[2]-coord_in_patch[0],1),max(coord_in_patch[3]-coord_in_patch[1],1)])
-                    canvas_id.append(id)
-
-            self.coordinates = np.array(coordinates)
-            self.coordinates_in_patch = np.array(coordinates_in_patch)
-            self.canvas_id = np.array(canvas_id)
-            self.canvas_size = np.array(canvas_size)
+                elif self.pack_mode == 'crop':
+                    if coord[2]-coord[0] > coord_in_patch[2]-coord_in_patch[0] + 0.1:
+                        x_center = (coord[0]+coord[2])/2
+                        half_cropped_width = (coord_in_patch[2]-coord_in_patch[0])/2
+                        coord[0] = x_center - half_cropped_width
+                        coord[2] = x_center + half_cropped_width
+                    elif coord[3]-coord[1] > coord_in_patch[3]-coord_in_patch[1] + 0.1:
+                        y_center = (coord[1]+coord[3])/2
+                        half_cropped_height = (coord_in_patch[3]-coord_in_patch[1])/2
+                        coord[1] = y_center - half_cropped_height
+                        coord[3] = y_center + half_cropped_height
+                    coordinates.append([coord[0],coord[1],coord[2]-coord[0],coord[3]-coord[1]])
+                    coordinates_in_patch.append([coord_in_patch[0],coord_in_patch[1],coord_in_patch[2]-coord_in_patch[0],coord_in_patch[3]-coord_in_patch[1]])
                 
-        except:
-            pass
+                canvas_id.append(id)
+
+        self.coordinates = np.array(coordinates)
+        self.coordinates_in_patch = np.array(coordinates_in_patch)
+        self.canvas_id = np.array(canvas_id)
+        self.canvas_size = np.array(canvas_size)
+        self.padding = np.zeros((len(self.coordinates), 2))
         
-
-
-        # draw_bboxes(self.item["file_name"], "/media/ps/passport1/ltc/monuseg18/assign_prior", self.coordinates, self.canvas_id)
-        
-
-
-
-        
-        print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
-        print(f"mean patch size:{int(self.coordinates[:,2].mean()), int(self.coordinates[:,3].mean())}")
-        print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
-        print(f"patch number: {len(self.coordinates)}")
-        print()
+        if len(self.coordinates) > 0:
+            print(f"max patch size:{int(self.coordinates[:,2].max()), int(self.coordinates[:,3].max())}")
+            print(f"mean patch size:{int(self.coordinates[:,2].mean()), int(self.coordinates[:,3].mean())}")
+            print(f"min patch size:{int(self.coordinates[:,2].min()), int(self.coordinates[:,3].min())}")
+            print(f"patch number: {len(self.coordinates)}")
+            print()   
         
     def __getitem__(self, idx):   
         ids = np.where(self.canvas_id==idx)[0]
         
-        coord = self.coordinates[ids].astype(int)
-        coord_in_patch = self.coordinates_in_patch[ids].astype(int)
+        coord = (self.coordinates[ids]).astype(int)
+        coord_in_patch = (self.coordinates_in_patch[ids]).astype(int)
 
-        if self.canvas_size is not None:
-            canvas_size = self.canvas_size
+        
+        if (self.canvas_size[idx] < 0).any():
+            current_canvas_size = [max(coord_in_patch[:,0]+coord_in_patch[:,2]),max(coord_in_patch[:,1]+coord_in_patch[:,3])]
         else:
-            canvas_size = np.array([[(coord_in_patch[:,0]+coord_in_patch[:,2]).max(), (coord_in_patch[:,1]+coord_in_patch[:,3]).max()]]*self.coordinates.shape[0])
+            current_canvas_size = self.canvas_size[idx]
             
-        canvas = np.ones((canvas_size[idx, 1], canvas_size[idx, 0], 3)) * self.bg_value
+        canvas = np.ones((current_canvas_size[1], current_canvas_size[0], 3)) * self.bg_value
         
         if self.item["file_name"].endswith(".jpg"):
             image = cv2.imread(self.item["file_name"])
@@ -1278,8 +1613,9 @@ class WSIPatchDataset(torchdata.Dataset):
         ret = self.item.copy()
         
         ret['image'] = canvas
-        ret["width"] = canvas_size[idx, 0]
-        ret["height"] = canvas_size[idx, 1]
+        ret["width"] = current_canvas_size[0]
+        ret["height"] = current_canvas_size[1]
+        ret['padding'] = self.padding[idx]
         ret['coord'] = coord
         ret['coord_in_patch'] = coord_in_patch
         ret['image_id'] = self.item['image_id']+'_'+str(idx)

@@ -8,6 +8,7 @@ from typing import List, Union
 import torch
 from torch import nn
 
+from detectron2.utils.img_utils import filter_bboxes_in_patch
 from detectron2.utils.comm import get_world_size, is_main_process
 from detectron2.utils.logger import log_every_n_seconds
 from detectron2.structures import Instances,Boxes
@@ -15,43 +16,6 @@ from tqdm import tqdm
 import os,json
 import numpy as np
 
-def filter_bboxes_in_patch(bboxes, patch, ratio=0.5):
-    """
-    筛选出在 patch 内部至少有一定比例端点在 patch 中的 bbox 的索引。
-
-    Args:
-        bboxes (numpy.ndarray): 二维数组，shape 为 (N, 4)，每一行是 [xmin, ymin, xmax, ymax]。
-        patch (tuple): patch 的范围 (xmin, ymin, xmax, ymax)。
-        ratio (float): 扩展比例，用于动态调整 patch 的边界。
-
-    Returns:
-        numpy.ndarray: 符合条件的 bbox 索引。
-    """
-    
-    # 解包 patch 范围
-    patch_xmin, patch_ymin, patch_xmax, patch_ymax = patch
-
-    # 计算每个 bbox 的宽度和高度
-    bbox_widths = bboxes[:, 2] - bboxes[:, 0]
-    bbox_heights = bboxes[:, 3] - bboxes[:, 1]
-
-    # 根据比例扩展 patch 的边界
-    expanded_patch_xmin = patch_xmin - bbox_widths * ratio
-    expanded_patch_ymin = patch_ymin - bbox_heights * ratio
-    expanded_patch_xmax = patch_xmax + bbox_widths * ratio
-    expanded_patch_ymax = patch_ymax + bbox_heights * ratio
-
-    # 检查 bbox 的四个端点是否都在扩展后的 patch 中
-    inside_xmin = bboxes[:, 0] >= expanded_patch_xmin
-    inside_ymin = bboxes[:, 1] >= expanded_patch_ymin
-    inside_xmax = bboxes[:, 2] <= expanded_patch_xmax
-    inside_ymax = bboxes[:, 3] <= expanded_patch_ymax
-
-    # 计算最终的筛选条件
-    selected_mask = inside_xmin & inside_ymin & inside_xmax & inside_ymax
-
-    # 返回符合条件的索引
-    return torch.where(selected_mask)[0]
 
 class DatasetEvaluator:
     """
@@ -378,15 +342,16 @@ def inference_on_wsi_dataset(
                         total_hit_scores = []
                         total_hit_classes = []
                         for cp,c in zip(coord_in_patch, coord):
-                            interval = np.array([0,0,0,0])
+                            # interval = np.array([patch[i]['padding'][0]/2,patch[i]['padding'][1]/2,patch[i]['padding'][0]/2,patch[i]['padding'][1]/2]).astype(int)
                             # interval = np.array([(0 if c[id]==lim else 1) for id, lim in enumerate([0,0,image_size[0],image_size[1]])])
+                            interval = np.array([0,0,0,0])
                             
                             patch_border = cp.copy()
                             patch_border[2:] += patch_border[:2]
                             patch_border[2:] -= interval[2:]
                             patch_border[:2] += interval[:2]
                             
-                            hit_idx = filter_bboxes_in_patch(output[i]["instances"].pred_boxes.tensor,patch_border,0.1)
+                            hit_idx = filter_bboxes_in_patch(output[i]["instances"].pred_boxes.tensor,patch_border,0)
 
                             scale = [c[2]/cp[2], c[3]/cp[3]]
                             hit_bbox = output[i]["instances"][hit_idx].pred_boxes.tensor
@@ -499,10 +464,12 @@ def inference_on_wsi_dataset(
     # Replace it by an empty dict instead to make it easier for downstream code to handle
     if results is None:
         results = {}
-        
-    if results is not None:
+    else:
         with open(output_file, 'r', encoding='utf-8') as f:
             final_results = json.load(f)
+        # 添加canvas number信息
+        total_canvas_number = sum([len(wsi['dataloader']) for inputs in data_loader for wsi in inputs])
+        final_results['canvas_number'] = total_canvas_number
         final_results.update({k: (v if isinstance(v, dict) else dict(v)) for k, v in results.items()})
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(final_results, f, indent=4)

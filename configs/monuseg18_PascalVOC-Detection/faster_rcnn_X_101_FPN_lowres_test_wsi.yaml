@@ -49,6 +49,9 @@ DATASETS:
   CLUSTER_PARAMETER:
     WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
     SCALE: 2.0
+    PATCH_SIZE: (1000,1000)
+    REGION_SIZE: (1000,1000)
+    STEP: 1.0
 
 TEST:
   DETECTIONS_PER_IMAGE: 2000

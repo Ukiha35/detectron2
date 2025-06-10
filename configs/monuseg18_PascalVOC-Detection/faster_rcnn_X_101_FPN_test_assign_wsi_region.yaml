@@ -24,29 +24,20 @@ MODEL:
 INPUT:
   MIN_SIZE_TEST: 0
   MAX_SIZE_TEST: 1000
+
 DATASETS:
-  TEST: ('voc_2007_test',)
+  TEST: ('voc_2007_wsi',)
   POST_PROCESS:
-    FINAL_NMS_THR: 0.45
-    AXIS_THR: 5.0
     AREA_THR: 50.0
-    FINAL_NMS_MODE: "min"
+    AXIS_THR: 5.0
+    FINAL_NMS_MODE: min
+    FINAL_NMS_THR: 0.45
   CLUSTER_PARAMETER:
-    EXPAND: 20
-    # BORDER: 0
-    NMM_THR: [0.1,0.1,0.1]
-    MAX_CHILD_SIZE: [200,200]
-    # CANVAS_SIZE: (200,200)
-    # PRIOR_LEVEL: (100,100)
-    PATCH_SIZE: (200,200)
-    ROI_THRESHOLD: 0.1
-    SELECTION_RATIO: 1.0
-    # NMM_CLUSTER_THR: [0.05,0.05,0.05]
-    # MAX_CLUSTER_SIZE: [300,300]
-    SCALE: 1.0
-    PRIOR_MODE: 'bbox'
-    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_150_lowres/conf_thr_0.05_SCALE_1.0_step_1.0_axis_5.0_area_50.0_patch_size_500_500_model_final"
+    PRIOR: "/home/ps/ltc/AssignNet2d/experiments/MONUSEG_IMAGE/tree_ap_ptr_ban_ap_shared_bin800_len4_fix_lambda_0.001_border_0/testwsi_assign_37.json" #######################
+    PRIOR_MODE: 'assign'
+    PACK_MODE: 'resize'
+  
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_stage2/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres_assign_region/" #######################

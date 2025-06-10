@@ -25,7 +25,7 @@ INPUT:
   MIN_SIZE_TEST: 0
   MAX_SIZE_TEST: 1000
 DATASETS:
-  TEST: ('voc_2007_test',)
+  TEST: ('voc_2007_wsi',)
   POST_PROCESS:
     FINAL_NMS_THR: 0.45
     AXIS_THR: 5.0
@@ -39,14 +39,18 @@ DATASETS:
     # CANVAS_SIZE: (200,200)
     # PRIOR_LEVEL: (100,100)
     PATCH_SIZE: (200,200)
+    REGION_SIZE: (1000,1000)
     ROI_THRESHOLD: 0.1
-    SELECTION_RATIO: 1.0
-    # NMM_CLUSTER_THR: [0.05,0.05,0.05]
-    # MAX_CLUSTER_SIZE: [300,300]
+    REGION_MODE: "region"
+    REGION: ["TCGA-ZF-A9R5-01A-01-TS1_wsi"]
+    REGION_FILE: [20280,2700,250,250]
+    REGION_LEVEL: 1
+
     SCALE: 1.0
     PRIOR_MODE: 'bbox'
-    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_150_lowres/conf_thr_0.05_SCALE_1.0_step_1.0_axis_5.0_area_50.0_patch_size_500_500_model_final"
+    PRIOR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres/conf_thr_0.05_SCALE_1.0_step_1.0_axis_5.0_area_50.0_patch_size_500_500_model_final" #######################
+    WSI_PRIOR: "/media/ps/passport1/ltc/monuseg18/MoNuSeg 2018 WSI patches 1000/patches/" #######################
 TEST:
   DETECTIONS_PER_IMAGE: 500
 
-SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_fullres_stage2/" #######################
+SAVE_DIR: "/media/ps/passport1/ltc/monuseg18/experiments_output/monuseg18_wsi_fullres_stage2/" #######################

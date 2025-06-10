@@ -153,22 +153,18 @@ def main(args):
 
 def invoke_main() -> None:
     args = default_argument_parser().parse_args()
-    args.GPU = '3'
+    args.GPU = '2'
     args.resume = True
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_lowres_train.yaml"
-    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
-    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train.yaml"
+    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/faster_rcnn_X_101_FPN_train2.yaml"
     # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_train.yaml"
-    args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_train.yaml"
+    # args.config_file = "/home/ps/ltc/detectron2/configs/monuseg18_PascalVOC-Detection/retinanet_R_50_FPN_lowres_train.yaml"
     
     
     
     # args.config_file = "/home/ps/ltc/detectron2/configs/PascalVOC-Detection/faster_rcnn_R_50_FPN.yaml"
     
     
-    
-    # args.eval_only = True
-
     print("Command Line Args:", args)
     os.environ["CUDA_VISIBLE_DEVICES"] = args.GPU
     launch(
@@ -183,8 +179,9 @@ def invoke_main() -> None:
 def register_all_pascal_voc():
     # dir = "/media/ps/passport1/ltc/DHB/VOC2007_pos_based_scale_20/"
     # dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_250/"
-    dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_1000/"
-
+    # dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_1000/"
+    dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_150/"
+    dir = "/media/ps/passport1/ltc/monuseg18/VOC2007_trainsize_100/"
     
     SPLITS = [
         ("voc_2007_trainval", dir, "trainval"),
